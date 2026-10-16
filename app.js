@@ -153,46 +153,59 @@
   }
 
   function tarjeta(b) {
-    const li = document.createElement("li"); li.className = "card";
-    const cuerpo = document.createElement("div"); cuerpo.className = "cuerpo";
-    if (b.pais) { const p = document.createElement("div"); p.className = "pais"; p.textContent = b.pais; li.append(p); }
-    const est = document.createElement("span"); est.className = "estado " + b.estado.clase; est.textContent = b.estado.etiqueta;
-    const h = document.createElement("h2"); h.textContent = b.nombre;
-    const dl = document.createElement("dl"); dl.className = "datos";
+    const el = (tag, clase, texto) => { const e = document.createElement(tag); if (clase) e.className = clase; if (texto != null) e.textContent = texto; return e; };
+    const lista = (v) => String(v || "").split(/\s*[;,]\s*/).filter(Boolean);
+    const li = el("li", "card");
+    if (b.pais) li.append(el("div", "pais", b.pais));
+    const cuerpo = el("div", "cuerpo");
+
+    // Lo esencial a la vista: estado, nombre, próxima fecha y etiquetas cortas
+    cuerpo.append(el("span", "estado " + b.estado.clase, b.estado.etiqueta), el("h2", null, b.nombre), el("p", "cierre", b.estado.texto));
+    const tags = el("ul", "tags");
+    [...lista(b.nivel), ...lista(b.tipoPosgrado), b.cobertura ? "Cobertura " + b.cobertura.toLowerCase() : "", ...lista(b.idioma), ...lista(b.modalidad)]
+      .filter((t) => t && norm(t) !== "otro").forEach((t) => tags.append(el("li", null, t)));
+    if (tags.children.length) cuerpo.append(tags);
+    if (b.area) { const a = el("p", "area"); a.append(el("span", null, "Área: "), b.area.replace(/\s*;\s*/g, ", ")); cuerpo.append(a); }
+
+    // El resto, plegado
     const edad = b.edadMin && b.edadMax ? b.edadMin + " a " + b.edadMax + " años" : b.edadMin ? "Desde " + b.edadMin + " años" : b.edadMax ? "Hasta " + b.edadMax + " años" : "";
-    [["Nivel", b.nivel], ["Tipo de posgrado", b.tipoPosgrado], ["Área", b.area], ["Subárea", b.subarea],
-     ["Nacionalidades elegibles", b.nacionalidades], ["Edad", edad], ["Cobertura", b.cobertura],
-     ["Duración de la financiación", b.duracion], ["El importe depende de", b.importeSegun], ["Plazas", b.plazas],
-     ["Idioma de enseñanza", b.idioma], ["Modalidad", b.modalidad]].forEach(([k, v]) => {
+    const dl = el("dl", "datos");
+    [["Enfoque", b.subarea], ["Nacionalidades elegibles", b.nacionalidades], ["Edad", edad],
+     ["Duración de la financiación", b.duracion], ["El monto depende de", b.importeSegun], ["Plazas", b.plazas]].forEach(([k, v]) => {
       if (!v) return;
-      const dt = document.createElement("dt"); dt.textContent = k;
-      const dd = document.createElement("dd"); dd.textContent = v.replace(/\s*;\s*/g, ", ");
-      dl.append(dt, dd);
+      dl.append(el("dt", null, k), el("dd", null, v.replace(/\s*;\s*/g, ", ")));
     });
-    const c = document.createElement("p"); c.className = "cierre"; c.style.margin = "0"; c.textContent = b.estado.texto;
-    cuerpo.append(est, h, dl, c);
+    let ul = null;
     if (b.listaPlazos.length > 1 || (b.listaPlazos[0] && (b.listaPlazos[0].ronda || b.listaPlazos[0].hora))) {
-      const ul = document.createElement("ul"); ul.className = "plazos";
+      ul = el("ul", "plazos");
       b.listaPlazos.slice().sort((x, y) => parseFecha(x.fecha) - parseFecha(y.fecha)).forEach((p) => {
-        const li2 = document.createElement("li");
-        const partes = [p.ronda, p.tipo].filter(Boolean).join(" · ");
+        const partes = [...new Set([p.ronda, p.tipo].filter(Boolean))].join(" · ");
         const hora = p.hora ? ", " + p.hora + (p.zona ? " (" + p.zona + ")" : "") : "";
-        li2.textContent = (partes ? partes + ": " : "") + fmt(parseFecha(p.fecha)) + hora +
+        const li2 = el("li", diasHasta(parseFecha(p.fecha)) < 0 ? "pasado" : null);
+        if (partes) li2.append(el("strong", null, partes), document.createElement("br"));
+        li2.append(fmt(parseFecha(p.fecha)) + hora +
           (p.ingreso && norm(p.ingreso) !== "no especificado" ? " · ingreso " + p.ingreso.toLowerCase() : "") +
-          (norm(p.estado) === "estimada" ? " · estimada" : "");
-        if (diasHasta(parseFecha(p.fecha)) < 0) li2.className = "pasado";
+          (norm(p.estado) === "estimada" ? " · estimada" : ""));
         ul.append(li2);
       });
-      cuerpo.append(ul);
     }
+    if (dl.children.length || ul) {
+      const det = el("details", "mas");
+      det.append(el("summary", null, "Ver detalles"));
+      if (ul) det.append(el("p", "sub", "Fechas límite"), ul);
+      if (dl.children.length) det.append(dl);
+      cuerpo.append(det);
+    }
+
+    const pie = el("div", "pie-card");
     const vf = parseFecha(b.verificado);
-    if (vf) { const v = document.createElement("p"); v.className = "verificado"; v.textContent = "Información verificada el " + fmt(vf); cuerpo.append(v); }
-    li.append(cuerpo);
+    if (vf) pie.append(el("p", "verificado", "Verificada el " + fmt(vf)));
     if (/^https?:\/\//i.test(b.enlace)) {
-      const a = document.createElement("a"); a.className = "ir"; a.href = b.enlace; a.target = "_blank"; a.rel = "noopener";
-      a.textContent = "Ver convocatoria oficial";
-      cuerpo.append(a);
+      const a = el("a", "ir", "Ver convocatoria oficial"); a.href = b.enlace; a.target = "_blank"; a.rel = "noopener";
+      pie.append(a);
     }
+    cuerpo.append(pie);
+    li.append(cuerpo);
     return li;
   }
 
