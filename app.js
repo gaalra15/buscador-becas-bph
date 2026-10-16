@@ -1,0 +1,285 @@
+// Buscador de becas: lee el CSV publicado, calcula si cada beca está abierta y aplica filtros que se guardan en la URL.
+(function () {
+  const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+  const FILTROS = ["nivel", "area", "pais", "cobertura", "idioma", "modalidad"];
+  const CAMPOS_LISTA = ["nivel", "area", "idioma", "modalidad"]; // celdas que pueden traer varios valores separados por ; o ,
+
+  const $ = (sel) => document.querySelector(sel);
+  const norm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+
+  // --- CSV (soporta comillas, comas y saltos de línea dentro de celdas) ---
+  function parseCSV(text) {
+    const rows = []; let row = []; let cell = ""; let q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) {
+        if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+        else if (c === '"') q = false;
+        else cell += c;
+      } else if (c === '"') q = true;
+      else if (c === ",") { row.push(cell); cell = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(cell); rows.push(row); row = []; cell = "";
+      } else cell += c;
+    }
+    if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter((r) => r.some((v) => v.trim() !== ""));
+  }
+
+  // --- Fechas ---
+  function hoy() { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+  function parseFecha(s) {
+    s = String(s || "").trim();
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); // dd/mm/aaaa (formato de Google Sheets en español)
+    if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+    return null;
+  }
+  function parseMes(s) {
+    const n = norm(s);
+    const i = MESES.findIndex((m) => n.startsWith(m.slice(0, 3)));
+    if (i >= 0) return i;
+    const k = parseInt(n, 10);
+    return k >= 1 && k <= 12 ? k - 1 : -1;
+  }
+  const fmt = (d) => d.toLocaleDateString("es-HN", { day: "numeric", month: "long", year: "numeric" });
+  const diasHasta = (d) => Math.round((d - hoy()) / 86400000);
+
+  // Devuelve { abierta, etiqueta, clase, texto, orden }
+  // plazos: [{ronda, tipo, fecha:"aaaa-mm-dd", hora, zona, ingreso, estado:"Confirmada"|"Estimada"}] (columna "plazos")
+  function leerPlazos(s) {
+    try { const l = JSON.parse(s || "[]"); return Array.isArray(l) ? l.filter((p) => parseFecha(p.fecha)) : []; } catch (e) { return []; }
+  }
+
+  function calcularEstado(tipo, valor, plazos) {
+    const t = norm(tipo);
+    const pronto = (d) => diasHasta(d) <= DIAS_CIERRA_PRONTO;
+
+    if (t.includes("todo el ano") || t === "abierta") {
+      return { abierta: true, etiqueta: "Abierta todo el año", clase: "abierta", texto: "Sin fecha de cierre", orden: 1e6 };
+    }
+    if (plazos && plazos.length) {
+      const orden = plazos.map((p) => ({ ...p, d: parseFecha(p.fecha) })).sort((a, b) => a.d - b.d);
+      const prox = orden.find((p) => diasHasta(p.d) >= 0);
+      const detalle = (p) => fmt(p.d) + (norm(p.estado) === "estimada" ? " (fecha estimada)" : "") + (p.tipo ? " · " + p.tipo : "");
+      if (prox) return { abierta: true, etiqueta: pronto(prox.d) ? "Cierra pronto" : "Abierta", clase: pronto(prox.d) ? "pronto" : "abierta", texto: "Próximo plazo: " + detalle(prox), orden: diasHasta(prox.d) };
+      const ult = orden[orden.length - 1];
+      return { abierta: false, etiqueta: "Cerrada", clase: "cerrada", texto: "Último plazo: " + detalle(ult), orden: 2e6 };
+    }
+    if (t.includes("sin fecha")) {
+      return { abierta: false, etiqueta: "Sin fecha publicada", clase: "cerrada", texto: "La convocatoria aún no publica fecha límite", orden: 2.5e6 };
+    }
+    const esMes = t.includes("mes") || (t.includes("varias") && !/\d/.test(String(valor)) && parseMes(valor) >= 0);
+    if (t.includes("varias") && !esMes) {
+      const fechas = String(valor).split(/[;\n]/).map(parseFecha).filter(Boolean).sort((a, b) => a - b);
+      const prox = fechas.find((d) => diasHasta(d) >= 0);
+      if (prox) return { abierta: true, etiqueta: pronto(prox) ? "Cierra pronto" : "Abierta", clase: pronto(prox) ? "pronto" : "abierta", texto: "Próximo cierre: " + fmt(prox), orden: diasHasta(prox) };
+      if (fechas.length) return { abierta: false, etiqueta: "Cerrada", clase: "cerrada", texto: "Último cierre: " + fmt(fechas[fechas.length - 1]), orden: 2e6 };
+      if (String(valor).trim() && parseMes(valor) < 0) return { abierta: false, etiqueta: "Revisar fechas", clase: "cerrada", texto: String(valor).trim(), orden: 3e6 };
+    }
+    if (esMes) {
+      const mes = parseMes(valor);
+      if (mes >= 0) {
+        const actual = hoy().getMonth();
+        // Supuesto: "solo mes" significa que cierra al final de ese mes, cada año.
+        if (mes >= actual) {
+          const fin = new Date(hoy().getFullYear(), mes + 1, 0);
+          return { abierta: true, etiqueta: pronto(fin) ? "Cierra pronto" : "Abierta", clase: pronto(fin) ? "pronto" : "abierta", texto: "Cierra en " + MESES[mes] + " (día por confirmar)", orden: diasHasta(fin) };
+        }
+        return { abierta: false, etiqueta: "Cerrada este año", clase: "cerrada", texto: "Suele cerrar en " + MESES[mes], orden: 2e6 };
+      }
+    }
+    const d = parseFecha(valor);
+    if (d) {
+      if (diasHasta(d) < 0) return { abierta: false, etiqueta: "Cerrada", clase: "cerrada", texto: "Cerró el " + fmt(d), orden: 2e6 };
+      return { abierta: true, etiqueta: pronto(d) ? "Cierra pronto" : "Abierta", clase: pronto(d) ? "pronto" : "abierta", texto: "Cierra el " + fmt(d), orden: diasHasta(d) };
+    }
+    return { abierta: false, etiqueta: "Revisar fecha", clase: "cerrada", texto: "Fecha de cierre no disponible", orden: 3e6 };
+  }
+
+  // --- Datos ---
+  function aObjetos(rows) {
+    const cab = rows[0].map(norm);
+    const idx = {};
+    for (const [campo, nombre] of Object.entries(COLUMNAS)) idx[campo] = cab.indexOf(norm(nombre));
+    const faltan = Object.keys(idx).filter((k) => idx[k] < 0 && ["nombre", "tipoCierre", "cierre", "enlace"].includes(k)); // el resto es opcional
+    if (faltan.length) console.warn("Columnas no encontradas en el CSV:", faltan.map((k) => COLUMNAS[k]));
+    return rows.slice(1).map((r) => {
+      const o = {};
+      for (const campo in idx) o[campo] = idx[campo] >= 0 ? (r[idx[campo]] || "").trim() : "";
+      return o;
+    });
+  }
+  const aprobada = (v) => ["si", "x", "true", "verdadero", "aprobada", "aprobado", "1"].includes(norm(v));
+  // "Pregrado y posgrado" (tercera opción de Nivel) cuenta para los dos filtros.
+  const SEPARADOR = { nivel: /[;,]|\s+y\s+/i };
+  const mayuscula = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const valores = (beca, campo) => CAMPOS_LISTA.includes(campo) ? beca[campo].split(SEPARADOR[campo] || /[;,]/).map((s) => mayuscula(s.trim())).filter(Boolean) : [beca[campo]].filter(Boolean);
+
+  let becas = [];
+
+  // --- URL <-> filtros ---
+  function leerURL() {
+    const p = new URLSearchParams(location.search);
+    $("#q").value = p.get("q") || "";
+    $("#abiertas").checked = p.get("abiertas") === "1";
+    for (const f of FILTROS) {
+      const v = p.get(f); const sel = $("#f-" + f);
+      if (!v) { sel.value = ""; continue; }
+      const op = [...sel.options].find((o) => norm(o.value) === norm(v));
+      sel.value = op ? op.value : "";
+    }
+    if (FILTROS.some((f) => p.get(f))) $("details.filtros").open = true;
+  }
+  function escribirURL() {
+    const p = new URLSearchParams();
+    if ($("#q").value.trim()) p.set("q", $("#q").value.trim());
+    if ($("#abiertas").checked) p.set("abiertas", "1");
+    for (const f of FILTROS) { const v = $("#f-" + f).value; if (v) p.set(f, v); }
+    const qs = p.toString();
+    try { history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "")); } catch (e) { /* en algunos marcos incrustados no se permite */ }
+  }
+
+  // --- Pintar ---
+  function llenarSelects() {
+    for (const f of FILTROS) {
+      const set = new Map();
+      becas.forEach((b) => valores(b, f).forEach((v) => { if (!set.has(norm(v))) set.set(norm(v), v); }));
+      const sel = $("#f-" + f);
+      [...set.values()].sort((a, b) => a.localeCompare(b, "es")).forEach((v) => sel.add(new Option(v, v)));
+    }
+  }
+
+  function tarjeta(b) {
+    const li = document.createElement("li"); li.className = "card";
+    const cuerpo = document.createElement("div"); cuerpo.className = "cuerpo";
+    if (b.pais) { const p = document.createElement("div"); p.className = "pais"; p.textContent = b.pais; li.append(p); }
+    const est = document.createElement("span"); est.className = "estado " + b.estado.clase; est.textContent = b.estado.etiqueta;
+    const h = document.createElement("h2"); h.textContent = b.nombre;
+    const dl = document.createElement("dl"); dl.className = "datos";
+    const edad = b.edadMin && b.edadMax ? b.edadMin + " a " + b.edadMax + " años" : b.edadMin ? "Desde " + b.edadMin + " años" : b.edadMax ? "Hasta " + b.edadMax + " años" : "";
+    [["Nivel", b.nivel], ["Tipo de posgrado", b.tipoPosgrado], ["Área", b.area], ["Subárea", b.subarea],
+     ["Nacionalidades elegibles", b.nacionalidades], ["Edad", edad], ["Cobertura", b.cobertura],
+     ["Duración de la financiación", b.duracion], ["El importe depende de", b.importeSegun], ["Plazas", b.plazas],
+     ["Idioma de enseñanza", b.idioma], ["Modalidad", b.modalidad]].forEach(([k, v]) => {
+      if (!v) return;
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v.replace(/\s*;\s*/g, ", ");
+      dl.append(dt, dd);
+    });
+    const c = document.createElement("p"); c.className = "cierre"; c.style.margin = "0"; c.textContent = b.estado.texto;
+    cuerpo.append(est, h, dl, c);
+    if (b.listaPlazos.length > 1 || (b.listaPlazos[0] && (b.listaPlazos[0].ronda || b.listaPlazos[0].hora))) {
+      const ul = document.createElement("ul"); ul.className = "plazos";
+      b.listaPlazos.slice().sort((x, y) => parseFecha(x.fecha) - parseFecha(y.fecha)).forEach((p) => {
+        const li2 = document.createElement("li");
+        const partes = [p.ronda, p.tipo].filter(Boolean).join(" · ");
+        const hora = p.hora ? ", " + p.hora + (p.zona ? " (" + p.zona + ")" : "") : "";
+        li2.textContent = (partes ? partes + ": " : "") + fmt(parseFecha(p.fecha)) + hora +
+          (p.ingreso && norm(p.ingreso) !== "no especificado" ? " · ingreso " + p.ingreso.toLowerCase() : "") +
+          (norm(p.estado) === "estimada" ? " · estimada" : "");
+        if (diasHasta(parseFecha(p.fecha)) < 0) li2.className = "pasado";
+        ul.append(li2);
+      });
+      cuerpo.append(ul);
+    }
+    const vf = parseFecha(b.verificado);
+    if (vf) { const v = document.createElement("p"); v.className = "verificado"; v.textContent = "Información verificada el " + fmt(vf); cuerpo.append(v); }
+    li.append(cuerpo);
+    if (/^https?:\/\//i.test(b.enlace)) {
+      const a = document.createElement("a"); a.className = "ir"; a.href = b.enlace; a.target = "_blank"; a.rel = "noopener";
+      a.textContent = "Ver convocatoria oficial";
+      cuerpo.append(a);
+    }
+    return li;
+  }
+
+  function aplicar() {
+    const q = norm($("#q").value);
+    const soloAbiertas = $("#abiertas").checked;
+    const sel = Object.fromEntries(FILTROS.map((f) => [f, norm($("#f-" + f).value)]));
+    const res = becas.filter((b) => {
+      if (soloAbiertas && !b.estado.abierta) return false;
+      for (const f of FILTROS) if (sel[f] && !valores(b, f).some((v) => norm(v) === sel[f])) return false;
+      if (q && !norm([b.nombre, b.pais, b.nacionalidades, b.nivel, b.tipoPosgrado, b.area, b.subarea, b.cobertura, b.idioma, b.modalidad].join(" ")).includes(q)) return false;
+      return true;
+    });
+    const lista = $("#lista"); lista.replaceChildren(...res.map(tarjeta));
+    $("#vacio").hidden = res.length > 0;
+    $("#conteo").textContent = res.length === 1 ? "1 beca" : res.length + " becas";
+    const activos = FILTROS.filter((f) => sel[f]).length + (soloAbiertas ? 1 : 0) + (q ? 1 : 0);
+    $("#limpiar").hidden = activos === 0;
+    escribirURL();
+  }
+
+  async function iniciar() {
+    $("#aviso-ejemplo").hidden = !/datos-ejemplo\.csv$/.test(CSV_URL);
+    try {
+      const resp = await fetch(CSV_URL, { cache: "no-store" });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const rows = parseCSV(await resp.text());
+      if (rows.length < 2) {
+        $("#estado-carga").textContent = "Todavía no hay becas publicadas. Vuelve pronto.";
+        return;
+      }
+      const cab = rows[0].map(norm);
+      const faltan = Object.entries(COLUMNAS).filter(([k, n]) => ["nombre", "tipoCierre", "cierre", "enlace"].includes(k) && !cab.includes(norm(n))).map(([, n]) => n);
+      if (faltan.length) {
+        $("#estado-carga").textContent = "La hoja no tiene estas columnas: " + faltan.join(", ") + ". Revisa los encabezados o COLUMNAS en config.js.";
+        return;
+      }
+      becas = aObjetos(rows)
+        .filter((b) => b.nombre && (COLUMNAS.aprobada == null || aprobada(b.aprobada)))
+        .map((b) => { const listaPlazos = leerPlazos(b.plazos); return { ...b, listaPlazos, estado: calcularEstado(b.tipoCierre, b.cierre, listaPlazos) }; })
+        .sort((a, b) => a.estado.orden - b.estado.orden || a.nombre.localeCompare(b.nombre, "es"));
+    } catch (e) {
+      console.error(e);
+      $("#estado-carga").textContent = "No se pudieron cargar las becas. Revisa tu conexión e intenta de nuevo más tarde.";
+      return;
+    }
+    $("#estado-carga").hidden = true;
+    llenarSelects();
+    leerURL();
+    ["#q", "#abiertas", ...FILTROS.map((f) => "#f-" + f)].forEach((s) => $(s).addEventListener(s === "#q" ? "input" : "change", aplicar));
+    $("#limpiar").addEventListener("click", () => {
+      $("#q").value = ""; $("#abiertas").checked = false; FILTROS.forEach((f) => ($("#f-" + f).value = "")); aplicar();
+    });
+    aplicar();
+  }
+
+  // --- Vista celular / web (celular por defecto; index.html la aplica antes de pintar) ---
+  function iniciarVista() {
+    const botones = document.querySelectorAll(".vista button[data-vista]");
+    const marcar = (v) => {
+      document.documentElement.dataset.vista = v;
+      botones.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.vista === v)));
+    };
+    marcar(document.documentElement.dataset.vista || "celular");
+    botones.forEach((b) => b.addEventListener("click", () => {
+      marcar(b.dataset.vista);
+      try { localStorage.setItem("vista", b.dataset.vista); } catch (e) { /* sin almacenamiento: la vista no se recuerda */ }
+    }));
+  }
+
+  // --- Modo claro / oscuro (sin elección guardada sigue el del sistema) ---
+  function iniciarTema() {
+    const raiz = document.documentElement;
+    const botones = document.querySelectorAll(".tema button");
+    const oscuroSistema = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+    const actual = () => raiz.dataset.theme || (oscuroSistema && oscuroSistema.matches ? "dark" : "light");
+    const marcar = () => botones.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.tema === actual())));
+    marcar();
+    if (oscuroSistema && oscuroSistema.addEventListener) oscuroSistema.addEventListener("change", marcar);
+    botones.forEach((b) => b.addEventListener("click", () => {
+      raiz.dataset.theme = b.dataset.tema;
+      try { localStorage.setItem("tema", b.dataset.tema); } catch (e) { /* sin almacenamiento: no se recuerda */ }
+      marcar();
+    }));
+  }
+
+  // Expuesto solo para pruebas
+  window.__becas = { calcularEstado, parseCSV, leerPlazos };
+  document.addEventListener("DOMContentLoaded", () => { iniciarTema(); iniciarVista(); iniciar(); });
+})();
