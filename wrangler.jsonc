@@ -1,0 +1,10 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "buscador-becas-bph",
+  "compatibility_date": "2026-10-12",
+  "assets": {
+    "directory": "."
+  },
+  "workers_dev": true,
+  "preview_urls": false
+}

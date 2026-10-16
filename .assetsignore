@@ -1,0 +1,8 @@
+# Lo que NO se publica en la web (solo index.html, styles.css, app.js, config.js y logo.jpg)
+.git
+.wrangler
+.gitignore
+.assetsignore
+wrangler.jsonc
+README.md
+node_modules
