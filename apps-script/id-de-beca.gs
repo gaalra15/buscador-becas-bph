@@ -116,6 +116,7 @@ function alEnviar(e) {
         if (iAprob >= 0) hoja.getRange(destino, iAprob + 1).setValue(true); // se publica sola
         if (c(COL_ARCHIVADA) >= 0) hoja.getRange(destino, c(COL_ARCHIVADA) + 1).clearContent(); // corregida = ya no archivada
         escribirPlazos(hoja, destino);
+        aprenderOpciones(cab, nueva);
         hoja.deleteRow(fila);
         asegurarEstado(hoja);
         const copias = [...new Set([correo.toLowerCase(), ...CORREOS_COPIA_CORRECCIONES])].filter(Boolean).join(",");
@@ -138,6 +139,7 @@ function alEnviar(e) {
     hoja.getRange(fila, iId + 1).setValue(nuevoId);
     if (iAprob >= 0) hoja.getRange(fila, iAprob + 1).setValue(autorizada); // solo se publica sola si la envía BpH
     escribirPlazos(hoja, fila);
+    aprenderOpciones(cab, nueva);
     asegurarEstado(hoja);
     avisar(correo, "Beca registrada: " + nuevoId,
       aviso + "ID: " + nuevoId + "\n" + comoQueda + "\n\nLo que registraste:\n" + datos() + "\n\n" +
@@ -274,7 +276,7 @@ const TIPOS_CIERRE = ["Fecha única", "Varias rondas o fechas", "Solo mes", "Abi
 const CIERRE_VIEJO_A_NUEVO = { "fecha": "Fecha única", "varias fechas": "Varias rondas o fechas", "solo mes": "Solo mes", "abierta todo el año": "Abierta todo el año" };
 const TIPOS_PLAZO = ["Solicitud de beca", "Admisión universitaria", "Nominación", "Entrega de documentación"];
 const PERIODOS_INGRESO = ["Primavera", "Otoño", "Año académico", "No especificado"];
-const TIPOS_POSGRADO = ["Máster", "Doctorado", "Otros estudios de posgrado"];
+const TIPOS_POSGRADO = ["Maestría", "Doctorado", "Postdoctorado", "Otros estudios de posgrado"];
 const DURACIONES = ["1 año", "2 años", "3 años", "4 años", "Duración del programa", "Variable", "No especificada"];
 const IMPORTE_SEGUN = ["Necesidad económica", "Mérito académico", "Evaluación individual", "Monto fijo", "No especificado"];
 const MESES_CIERRE = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -849,4 +851,98 @@ function activarArchivar(desdeActualizar) {
   asegurarEstado(hoja, true);
   rehacerPublicadas();
   Logger.log("Listo: el formulario ya permite archivar y publicar becas por código.");
+}
+
+
+/* =====================================================================================================
+ * OPCIONES DEL FORMULARIO = VALORES DE LA HOJA (8 de noviembre): ejecutar UNA vez "sincronizarOpciones".
+ *
+ * - Agrega a cada pregunta de selección las opciones que ya existen en la hoja (por ejemplo "Otros niveles",
+ *   "Postdoctorado" o idiomas como Ruso y Catalán). Así, al corregir una beca, el formulario se abre lleno.
+ * - Activa "Otro" (con espacio para escribir) en PREGUNTAS_CON_OTRO. Lo que Jenny escriba ahí se agrega
+ *   solo como opción nueva después de enviar (función aprenderOpciones), para elegirlo la próxima vez.
+ * - Las listas desplegables no permiten "Otro" en Google Forms: solo se completan sus opciones.
+ * Se puede volver a ejecutar cuando se quiera; no duplica opciones (no distingue mayúsculas).
+ * ===================================================================================================== */
+const PREGUNTAS_CON_OTRO = [N.nivel, N.area, N.idioma, N.posgrado, N.importe, N.duracion];
+const PREGUNTAS_SINCRONIZADAS = PREGUNTAS_CON_OTRO.concat([N.pais, N.cobertura, N.modalidad, N.mes, U.tipo, U.ingreso])
+  .concat([1, 2, 3, 4].map((n) => [P(n).tipo, P(n).ingreso]).flat());
+const RENOMBRAR_OPCIONES = { [N.posgrado]: { "Máster": "Maestría" } }; // nombre viejo en el formulario -> nombre de la hoja
+const OPCIONES_NUEVAS = { [N.nivel]: ["Otros niveles"], [N.posgrado]: ["Postdoctorado"] };
+
+function itemDeSeleccion(it) {
+  const T_ = FormApp.ItemType, t = it.getType();
+  if (t === T_.CHECKBOX) return { tipo: "casillas", x: it.asCheckboxItem ? it.asCheckboxItem() : it };
+  if (t === T_.MULTIPLE_CHOICE) return { tipo: "opcion", x: it.asMultipleChoiceItem ? it.asMultipleChoiceItem() : it };
+  if (t === T_.LIST) return { tipo: "lista", x: it.asListItem ? it.asListItem() : it };
+  return null;
+}
+// Valores de una celda: las casillas vienen separadas por coma. Las fechas sueltas no son opciones.
+function partesDe(valor, tipo) {
+  if (valor === "" || valor === null || valor === undefined || valor instanceof Date) return [];
+  const s = String(valor).trim();
+  if (!s || /^\d{4}-\d{2}-\d{2}$/.test(s)) return [];
+  return tipo === "casillas" ? s.split(/,\s*/).map((x) => x.trim()).filter(Boolean) : [s];
+}
+// Agrega a la pregunta los valores que todavía no son opción. Devuelve la lista de opciones agregadas.
+function agregarOpciones(sel, titulo, valores, conOtro) {
+  const ren = RENOMBRAR_OPCIONES[titulo] || {};
+  const originales = sel.x.getChoices().map((c) => c.getValue());
+  const actuales = originales.map((v) => ren[v] || v);
+  const ya = new Set(actuales.map((v) => v.toLowerCase()));
+  const nuevas = [];
+  (OPCIONES_NUEVAS[titulo] || []).concat(valores).forEach((v) => {
+    v = ren[v] || v; // un valor viejo de la hoja (p. ej. "Máster") no vuelve a entrar como opción
+    const k = String(v).toLowerCase();
+    if (k && !ya.has(k)) { ya.add(k); nuevas.push(String(v)); }
+  });
+  nuevas.sort((a, b) => a.localeCompare(b, "es"));
+  if (nuevas.length || originales.some((v) => ren[v])) sel.x.setChoiceValues(actuales.concat(nuevas));
+  if (conOtro && sel.tipo !== "lista") sel.x.showOtherOption(true);
+  return nuevas;
+}
+
+function sincronizarOpciones() {
+  const form = FormApp.openById(IDS_FORMULARIO);
+  const hoja = SpreadsheetApp.openById(IDS_HOJA).getSheetByName("Respuestas");
+  const cab = encabezados(hoja);
+  const datos = hoja.getRange(2, 1, Math.max(hoja.getLastRow() - 1, 1), cab.length).getValues();
+  const items = form.getItems();
+  const informe = [];
+  PREGUNTAS_SINCRONIZADAS.forEach((titulo) => {
+    const it = items.find((i) => i.getTitle() === titulo && itemDeSeleccion(i));
+    if (!it) { informe.push("- " + titulo + ": no está en el formulario"); return; }
+    const sel = itemDeSeleccion(it);
+    const col = cab.indexOf(titulo);
+    const valores = col < 0 ? [] : datos.map((r) => partesDe(r[col], sel.tipo)).flat();
+    const conOtro = PREGUNTAS_CON_OTRO.includes(titulo);
+    const nuevas = agregarOpciones(sel, titulo, valores, conOtro);
+    informe.push("- " + titulo + ": " + (nuevas.length ? "se agregó " + nuevas.join(", ") : "ya estaba completa") +
+      (conOtro ? (sel.tipo === "lista" ? " (es lista desplegable: Google no permite \"Otro\")" : " · \"Otro\" activado") : ""));
+  });
+  // Lo que se renombró en el formulario también se renombra en la hoja (por ejemplo Máster -> Maestría)
+  Object.keys(RENOMBRAR_OPCIONES).forEach((titulo) => {
+    const col = cab.indexOf(titulo);
+    if (col < 0) return;
+    Object.entries(RENOMBRAR_OPCIONES[titulo]).forEach(([viejo, nuevo]) =>
+      hoja.getRange(2, col + 1, Math.max(hoja.getLastRow() - 1, 1), 1).createTextFinder(viejo).matchCase(true).replaceAllWith(nuevo));
+  });
+  Logger.log("Opciones del formulario actualizadas:\n" + informe.join("\n"));
+}
+
+// Después de cada envío: lo que se escribió en "Otro" queda como opción para la próxima vez.
+function aprenderOpciones(cab, fila) {
+  try {
+    const items = FormApp.openById(IDS_FORMULARIO).getItems();
+    PREGUNTAS_CON_OTRO.forEach((titulo) => {
+      const it = items.find((i) => i.getTitle() === titulo && itemDeSeleccion(i));
+      const col = cab.indexOf(titulo);
+      if (!it || col < 0) return;
+      const sel = itemDeSeleccion(it);
+      if (sel.tipo === "lista") return;
+      agregarOpciones(sel, titulo, partesDe(fila[col], sel.tipo), true);
+    });
+  } catch (e) {
+    console.error("No se pudieron agregar las opciones nuevas: " + e); // nunca frena el registro de la beca
+  }
 }
