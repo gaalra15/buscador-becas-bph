@@ -29,7 +29,12 @@ const COLUMNAS_PROPIAS = ["aprobada", "estado", "id_beca", "plazos", "archivada"
 
 // Archivar o publicar desde el formulario (8 de noviembre): ver "activarArchivar" más abajo.
 const TITULO_ACCION = "¿Qué quieres hacer?";
-const ACCION_REGISTRAR = "Registrar una beca nueva o corregir una";
+const ACCION_REGISTRAR = "Registrar una beca nueva o corregir una"; // opción vieja (respuestas anteriores al 8 de noviembre)
+const ACCION_NUEVA = "Añadir una beca nueva";
+const ACCION_CORREGIR = "Corregir una beca";
+const SECCION_CORREGIR = "Corregir una beca";
+const AYUDA_CORREGIR = "Para corregir una beca, escribe su código (aparece al pie de la ficha en el buscador, por ejemplo BPH-0007 o B1AMCA001) " +
+  "y llena todo de nuevo: la beca se reemplaza con estos datos.";
 const ACCION_ARCHIVAR = "Archivar una beca (quitarla del buscador)";
 const ACCION_PUBLICAR = "Publicar o volver a publicar una beca";
 const TITULO_CODIGO = "Código de la beca";
@@ -91,13 +96,13 @@ function alEnviar(e) {
     const nombre = String(nueva[iNombre] || "");
     const correo = iCorreo >= 0 ? String(nueva[iCorreo] || "").trim() : "";
     const autorizada = CORREOS_QUE_PUBLICAN.includes(correo.toLowerCase());
-    const idPedido = iCorr >= 0 ? String(nueva[iCorr] || "").trim().toUpperCase() : "";
+    const iAccion = c(TITULO_ACCION);
+    const accion = iAccion >= 0 ? String(nueva[iAccion] || "").trim() : "";
+    const idPedido = iCorr >= 0 && accion !== ACCION_NUEVA ? String(nueva[iCorr] || "").trim().toUpperCase() : "";
     const datos = () => resumen(cab, nueva, iCorr, iCorreo);
     const comoQueda = autorizada ? "Ya está publicada en el buscador." : "Quedó pendiente de revisión antes de publicarse.";
 
     // Archivar o publicar: la respuesta no es una beca, solo cambia "aprobada" de la beca con ese código
-    const iAccion = c(TITULO_ACCION);
-    const accion = iAccion >= 0 ? String(nueva[iAccion] || "").trim() : "";
     if (accion === ACCION_ARCHIVAR || accion === ACCION_PUBLICAR) {
       archivarOPublicar(hoja, fila, cab, nueva, accion === ACCION_ARCHIVAR, correo, autorizada);
       return;
@@ -650,7 +655,10 @@ function rehacerPublicadas() {
  *   Ejecutar como: Yo · Quién tiene acceso: Cualquier usuario con una cuenta de Google > Implementar.
  *   Copia la URL que termina en /exec y pégala en URL_PAGINA_CORREGIR (abajo). Guardar.
  * ===================================================================================================== */
-const URL_PAGINA_CORREGIR = ""; // p. ej. "https://script.google.com/macros/s/AKfycbyCg4jQCpvE5na4slb-oAwOLy7PCYGOqJgb9BS2S1P05OlZCYU_DCOHJR8eNVixiyZi/exec"
+const URL_PAGINA_CORREGIR = ""; // déjalo vacío: se usa sola la URL de la app web de ESTE proyecto
+function urlPaginaCorregir() {
+  try { return ScriptApp.getService().getUrl() || URL_PAGINA_CORREGIR; } catch (e) { return URL_PAGINA_CORREGIR; }
+} // p. ej. "https://script.google.com/macros/s/AKfycbyCg4jQCpvE5na4slb-oAwOLy7PCYGOqJgb9BS2S1P05OlZCYU_DCOHJR8eNVixiyZi/exec"
 
 // Arma el enlace prellenado para una fila de la hoja. Devuelve { url, faltan: [títulos que no se pudieron poner] }.
 function enlaceParaCorregir(cab, fila, form) {
@@ -666,7 +674,7 @@ function enlaceParaCorregir(cab, fila, form) {
     const tipo = item.getType();
     let v;
     const deUnica = Object.keys(U).find((k) => U[k] === titulo && k !== "seccion");
-    if (titulo === TITULO_ACCION) v = ACCION_REGISTRAR;
+    if (titulo === TITULO_ACCION) v = ACCION_CORREGIR;
     else if (titulo === TITULO_CODIGO) return;
     else if (titulo === TITULO_CORREGIR) v = id;
     else if (deUnica && !valorDe(cab, fila, U.fecha) && valorDe(cab, fila, N.tipo) === TIPOS_CIERRE[0])
@@ -728,7 +736,7 @@ function textoEnlaceCorregir(hoja, filaNum) {
     const { url, faltan } = enlaceParaCorregir(cab, fila);
     return "\n\nPara corregirla sin llenar todo de nuevo, abre este enlace (ya trae todos los datos), cambia lo que haga falta y envía:\n" +
       url + (faltan.length ? "\nOjo: estos campos no se pudieron prellenar y hay que llenarlos: " + faltan.join(", ") : "") +
-      (URL_PAGINA_CORREGIR ? "\n\nPara corregir cualquier otra beca, busca su ID aquí: " + URL_PAGINA_CORREGIR : "");
+      (urlPaginaCorregir() ? "\n\nPara corregir cualquier otra beca, busca su código aquí: " + urlPaginaCorregir() : "");
   } catch (e) {
     console.error("No se pudo armar el enlace para corregir: " + e);
     return "";
@@ -746,7 +754,7 @@ function doGet(e) {
     const iId = cab.indexOf("id_beca");
     const filas = hoja.getRange(2, 1, Math.max(hoja.getLastRow() - 1, 1), cab.length).getValues();
     const fila = filas.find((f) => String(f[iId]).trim().toUpperCase() === id);
-    if (!fila) cuerpo = '<p class="error">No encontramos el ID ' + esc(id) + '. Revisa que esté bien escrito (por ejemplo BPH-0463).</p>';
+    if (!fila) cuerpo = '<p class="error">No encontramos el ID ' + esc(id) + '. Revisa que esté escrito igual que al pie de la ficha en el buscador (por ejemplo BPH-0007 o B1AMCA001).</p>';
     else {
       const { url, faltan } = enlaceParaCorregir(cab, fila);
       cuerpo = '<p><b>' + esc(id) + '</b> · ' + esc(fila[cab.indexOf(N.nombre)]) + '</p>' +
@@ -761,7 +769,7 @@ function doGet(e) {
     'background:#003cd2;color:#fff;border:0;border-radius:8px;text-decoration:none;display:inline-block;cursor:pointer}' +
     '.nota{color:#55627a}.error{color:#a12a2a}</style></head><body>' +
     '<h1>Corregir una beca</h1><form method="get" action="' + esc(ScriptApp.getService().getUrl()) + '" target="_top">' +
-    '<input name="id" placeholder="BPH-0000" value="' + esc(id) + '" required> <button>Buscar</button></form>' + cuerpo +
+    '<input name="id" placeholder="Código" value="' + esc(id) + '" required> <button>Buscar</button></form>' + cuerpo +
     '</body></html>';
   return HtmlService.createHtmlOutput(html).setTitle("Corregir beca · BpH")
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
@@ -817,24 +825,37 @@ function activarArchivar(desdeActualizar) {
   // Quien llega al final de las fechas límite envía: nunca cae en esta sección por accidente
   comoPB(pbArch).setGoToPage(FormApp.PageNavigationType.SUBMIT);
 
-  // 2. Primera sección: "¿Qué quieres hacer?" y después el salto a "Datos de la beca"
+  // 2. Orden: ¿Qué quieres hacer? | Corregir una beca (enlace + código) | Datos de la beca | … | Archivar o publicar
+  //    "Añadir una beca nueva" salta directo a Datos (en blanco, sin la pregunta del código).
+  //    "Corregir una beca" muestra el enlace a la página de corrección y el código; después sigue a Datos.
   let pbDatos = buscar(SECCION_DATOS, T_.PAGE_BREAK);
   if (!pbDatos) pbDatos = form.addPageBreakItem().setTitle(SECCION_DATOS);
+  let pbCorr = buscar(SECCION_CORREGIR, T_.PAGE_BREAK);
+  if (!pbCorr) pbCorr = form.addPageBreakItem().setTitle(SECCION_CORREGIR);
+  let corr = buscar(TITULO_CORREGIR, T_.TEXT);
+  if (!corr) corr = form.addTextItem().setTitle(TITULO_CORREGIR);
   let accion = buscar(TITULO_ACCION, T_.MULTIPLE_CHOICE);
   if (!accion) accion = form.addMultipleChoiceItem().setTitle(TITULO_ACCION).setRequired(true);
   mover(accion, 0);
-  mover(pbDatos, 1);
+  mover(pbCorr, 1);
+  mover(corr, 2);
+  mover(pbDatos, 3);
+  const url = urlPaginaCorregir();
+  comoPB(pbCorr).setHelpText(url
+    ? "Para que el formulario se abra con todos los datos de la beca, búscala por su código en esta página:\n" + url +
+      "\n\nSi llegaste desde esa página o desde el correo, el código ya está puesto: toca Siguiente."
+    : "Si llegaste desde el enlace del correo, el código ya está puesto: toca Siguiente.");
+  comoPB(pbDatos).setGoToPage(FormApp.PageNavigationType.CONTINUE);
   const mc = comoMC(accion);
   mc.setChoices([
-    mc.createChoice(ACCION_REGISTRAR, comoPB(pbDatos)),
+    mc.createChoice(ACCION_NUEVA, comoPB(pbDatos)),
+    mc.createChoice(ACCION_CORREGIR, comoPB(pbCorr)),
     mc.createChoice(ACCION_ARCHIVAR, comoPB(pbArch)),
     mc.createChoice(ACCION_PUBLICAR, comoPB(pbArch)),
   ]);
 
-  // 3. "ID de beca a corregir" acepta cualquier código (no solo BPH-0000)
-  const corr = buscar(TITULO_CORREGIR, T_.TEXT);
-  if (corr) comoTX(corr).clearValidation().setHelpText("Déjalo VACÍO si es una beca nueva. Para corregir una beca, escribe su código " +
-    "(aparece al pie de la ficha en el buscador, por ejemplo BPH-0007 o B1AMCA001) y llena todo de nuevo: la beca se reemplaza con estos datos.");
+  // 3. El código: obligatorio al corregir, acepta cualquier formato (BPH-0007, B1AMCA001…)
+  comoTX(corr).clearValidation().setRequired(true).setHelpText(AYUDA_CORREGIR);
 
   if (desdeActualizar === true) return;
 
