@@ -39,6 +39,16 @@
   </div>
   <p class="intro">Becas revisadas por nuestro equipo. Filtra por lo que te interesa y abre la convocatoria oficial.</p>
 
+  <div class="pestanas" role="tablist" aria-label="Secciones">
+    <button type="button" role="tab" id="tab-buscar" aria-controls="panel-buscar" aria-selected="true">Buscar becas</button>
+    <button type="button" role="tab" id="tab-resumen" aria-controls="panel-resumen" aria-selected="false" tabindex="-1">Resumen de las becas</button>
+  </div>
+
+  <section class="panel" id="panel-resumen" role="tabpanel" aria-labelledby="tab-resumen" hidden>
+    <p class="vacio">Cargando becas…</p>
+  </section>
+
+  <section class="panel" id="panel-buscar" role="tabpanel" aria-labelledby="tab-buscar">
   <aside class="nota" aria-label="Cobertura completa o parcial">
     <p><strong>¿Completa o parcial?</strong> Cada beca define su cobertura de forma distinta.</p>
     <p><b>Completa</b> suele cubrir matrícula, manutención, pasajes de avión y otros gastos, pero lo que incluye varía según la convocatoria.</p>
@@ -75,6 +85,7 @@
   <p class="vacio" id="estado-carga">Cargando becas…</p>
   <ul class="lista" id="lista"></ul>
   <p class="vacio" id="vacio" hidden>No hay becas con esos filtros. Prueba quitando alguno.</p>
+  </section>
 
   <footer class="pie">
     <span><strong>Becas para Hondureños</strong></span>

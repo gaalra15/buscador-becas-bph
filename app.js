@@ -119,6 +119,7 @@
   const valores = (beca, campo) => CAMPOS_LISTA.includes(campo) ? beca[campo].split(SEPARADOR[campo] || /[;,]/).map((s) => mayuscula(s.trim())).filter(Boolean) : [beca[campo]].filter(Boolean);
 
   let becas = [];
+  let pestana = "buscar";
 
   // --- URL <-> filtros ---
   function leerURL() {
@@ -135,6 +136,7 @@
   }
   function escribirURL() {
     const p = new URLSearchParams();
+    if (pestana === "resumen") p.set("pestana", "resumen");
     if ($("#q").value.trim()) p.set("q", $("#q").value.trim());
     if ($("#abiertas").checked) p.set("abiertas", "1");
     for (const f of FILTROS) { const v = $("#f-" + f).value; if (v) p.set(f, v); }
@@ -228,6 +230,107 @@
     escribirURL();
   }
 
+  // --- Pestaña "Resumen de las becas": conteos calculados con las becas publicadas ---
+  const CONTEOS = [["nivel", "Por nivel"], ["cobertura", "Por cobertura"], ["area", "Por área"], ["pais", "Por país"], ["idioma", "Por idioma"], ["modalidad", "Por modalidad"]];
+  const MAX_FILAS = 12; // países e idiomas pueden ser muchos: se muestran los más frecuentes
+
+  function pintarResumen() {
+    const el = (tag, clase, texto) => { const e = document.createElement(tag); if (clase) e.className = clase; if (texto != null) e.textContent = texto; return e; };
+    const panel = $("#panel-resumen");
+    const n = (f) => becas.filter(f).length;
+    const tiles = [
+      ["Becas publicadas", becas.length, "En el buscador", ""],
+      ["Abiertas", n((b) => b.estado.clase === "abierta"), "Cierran en más de " + DIAS_CIERRA_PRONTO + " días o están abiertas todo el año", "abierta"],
+      ["Cierran pronto", n((b) => b.estado.clase === "pronto"), "En los próximos " + DIAS_CIERRA_PRONTO + " días", "pronto"],
+      ["Cerradas", n((b) => /^cerrada/i.test(b.estado.etiqueta)), "Ya pasaron todas sus fechas", "cerrada"],
+      ["Sin fecha publicada", n((b) => b.estado.etiqueta === "Sin fecha publicada"), "Revisa el enlace de cada ficha", "cerrada"],
+    ];
+    const revisar = n((b) => /^revisar/i.test(b.estado.etiqueta));
+    if (revisar) tiles.push(["Fecha por revisar", revisar, "La fecha no se pudo leer", "cerrada"]);
+
+    const fila = el("div", "stats");
+    tiles.forEach(([titulo, valor, ayuda, clase]) => {
+      const t = el("div", "stat");
+      t.append(el("p", "stat-titulo", titulo), el("p", "stat-num" + (clase ? " " + clase : ""), valor.toLocaleString("es-HN")), el("p", "stat-ayuda", ayuda));
+      fila.append(t);
+    });
+
+    const grupos = el("div", "grupos");
+    CONTEOS.forEach(([campo, titulo]) => {
+      const mapa = new Map();
+      becas.forEach((b) => [...new Set(valores(b, campo).map(norm))].forEach((k) => {
+        const v = valores(b, campo).find((x) => norm(x) === k);
+        if (!mapa.has(k)) mapa.set(k, { v, c: 0 });
+        mapa.get(k).c++;
+      }));
+      const todos = [...mapa.values()].sort((a, b) => b.c - a.c || a.v.localeCompare(b.v, "es"));
+      if (!todos.length) return;
+      const lista = todos.slice(0, MAX_FILAS);
+      const max = lista[0].c;
+      const g = el("section", "grupo");
+      g.append(el("h3", null, titulo));
+      const ul = el("ul", "conteo");
+      lista.forEach(({ v, c }) => {
+        const li = el("li");
+        const bt = el("button", "fila");
+        bt.type = "button";
+        bt.title = "Ver las " + c + " becas: " + v;
+        const barra = el("span", "barra-fondo");
+        const dato = el("span", "barra-dato");
+        dato.style.width = Math.max(2, (c / max) * 100) + "%";
+        barra.append(dato);
+        bt.append(el("span", "fila-et", v), barra, el("span", "fila-num", c.toLocaleString("es-HN")));
+        bt.addEventListener("click", () => verFiltro(campo, v));
+        li.append(bt);
+        ul.append(li);
+      });
+      g.append(ul);
+      if (todos.length > MAX_FILAS) g.append(el("p", "grupo-nota", "Y " + (todos.length - MAX_FILAS) + " más. Usa el filtro en Buscar becas para verlos todos."));
+      grupos.append(g);
+    });
+
+    panel.replaceChildren(
+      el("p", "resumen-intro", "Toca cualquier fila para ver esas becas. Una beca puede contar en varias filas (por ejemplo, si es de pregrado y posgrado o de varias áreas)."),
+      fila, grupos);
+  }
+
+  // Desde el resumen: abre Buscar becas con ese único filtro puesto
+  function verFiltro(campo, valor) {
+    $("#q").value = ""; $("#abiertas").checked = false;
+    FILTROS.forEach((f) => ($("#f-" + f).value = ""));
+    const op = [...$("#f-" + campo).options].find((o) => norm(o.value) === norm(valor));
+    if (op) $("#f-" + campo).value = op.value;
+    mostrarPestana("buscar");
+    aplicar();
+    $("#panel-buscar").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function mostrarPestana(cual, sinURL) {
+    pestana = cual === "resumen" ? "resumen" : "buscar";
+    ["buscar", "resumen"].forEach((p) => {
+      const activa = p === pestana;
+      $("#panel-" + p).hidden = !activa;
+      $("#tab-" + p).setAttribute("aria-selected", String(activa));
+      $("#tab-" + p).tabIndex = activa ? 0 : -1;
+    });
+    if (!sinURL) escribirURL(); // al cargar no se escribe: los filtros de la URL todavía no se leyeron
+  }
+
+  function iniciarPestanas() {
+    const tabs = ["buscar", "resumen"];
+    tabs.forEach((p, i) => {
+      const tab = $("#tab-" + p);
+      tab.addEventListener("click", () => mostrarPestana(p));
+      tab.addEventListener("keydown", (e) => { // flechas para moverse entre pestañas
+        if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+        const otra = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+        mostrarPestana(otra);
+        $("#tab-" + otra).focus();
+      });
+    });
+    if (new URLSearchParams(location.search).get("pestana") === "resumen") mostrarPestana("resumen", true);
+  }
+
   async function iniciar() {
     $("#aviso-ejemplo").hidden = !/datos-ejemplo\.csv$/.test(CSV_URL);
     try {
@@ -236,6 +339,7 @@
       const rows = parseCSV(await resp.text());
       if (rows.length < 2) {
         $("#estado-carga").textContent = "Todavía no hay becas publicadas. Vuelve pronto.";
+        $("#panel-resumen .vacio").textContent = "Todavía no hay becas publicadas. Vuelve pronto.";
         return;
       }
       const cab = rows[0].map(norm);
@@ -251,11 +355,13 @@
     } catch (e) {
       console.error(e);
       $("#estado-carga").textContent = "No se pudieron cargar las becas. Revisa tu conexión e intenta de nuevo más tarde.";
+      $("#panel-resumen .vacio").textContent = "No se pudieron cargar las becas. Revisa tu conexión e intenta de nuevo más tarde.";
       return;
     }
     $("#estado-carga").hidden = true;
     llenarSelects();
     leerURL();
+    pintarResumen();
     ["#q", "#abiertas", ...FILTROS.map((f) => "#f-" + f)].forEach((s) => $(s).addEventListener(s === "#q" ? "input" : "change", aplicar));
     $("#limpiar").addEventListener("click", () => {
       $("#q").value = ""; $("#abiertas").checked = false; FILTROS.forEach((f) => ($("#f-" + f).value = "")); aplicar();
@@ -295,5 +401,5 @@
 
   // Expuesto solo para pruebas
   window.__becas = { calcularEstado, parseCSV, leerPlazos };
-  document.addEventListener("DOMContentLoaded", () => { iniciarTema(); iniciarVista(); iniciar(); });
+  document.addEventListener("DOMContentLoaded", () => { iniciarTema(); iniciarVista(); iniciarPestanas(); iniciar(); });
 })();
