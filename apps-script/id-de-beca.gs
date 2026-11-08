@@ -53,6 +53,8 @@ function configurarIds() {
       .setRequired(false);
   }
   form.moveItem(item.getIndex(), 0);
+  // Si ya existe "¿Qué quieres hacer?", esa pregunta va primero y "ID de beca a corregir" en "Datos de la beca"
+  if (form.getItems().some((i) => i.getTitle() === TITULO_ACCION)) activarArchivar(true);
 
   // Pedir el correo verificado (iniciar sesión con Google) para mandar el ID y saber quién publica
   try { form.setEmailCollectionType(FormApp.EmailCollectionType.VERIFIED); }
