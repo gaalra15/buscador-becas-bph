@@ -25,7 +25,18 @@ const TITULO_CORREGIR = "ID de beca a corregir";
 const CORREOS_QUE_PUBLICAN = ["becasparahn@gmail.com", "raudalesg99@gmail.com"];
 // Quién recibe copia de cada corrección. Durante las pruebas solo Mariaj; al entregar, cambiar a ["becasparahn@gmail.com"].
 const CORREOS_COPIA_CORRECCIONES = ["raudalesg99@gmail.com"];
-const COLUMNAS_PROPIAS = ["aprobada", "estado", "id_beca", "plazos"]; // columnas de la hoja que no vienen del formulario
+const COLUMNAS_PROPIAS = ["aprobada", "estado", "id_beca", "plazos", "archivada"]; // columnas de la hoja que no vienen del formulario
+
+// Archivar o publicar desde el formulario (8 de noviembre): ver "activarArchivar" más abajo.
+const TITULO_ACCION = "¿Qué quieres hacer?";
+const ACCION_REGISTRAR = "Registrar una beca nueva o corregir una";
+const ACCION_ARCHIVAR = "Archivar una beca (quitarla del buscador)";
+const ACCION_PUBLICAR = "Publicar o volver a publicar una beca";
+const TITULO_CODIGO = "Código de la beca";
+const SECCION_DATOS = "Datos de la beca";
+const SECCION_ARCHIVAR = "Archivar o publicar una beca";
+const COL_ARCHIVADA = "archivada"; // fecha en que se archivó (vacía = no archivada)
+const SOLO_FORMULARIO = [TITULO_ACCION, TITULO_CODIGO]; // preguntas que no son datos de la beca
 
 function configurarIds() {
   const form = FormApp.openById(IDS_FORMULARIO);
@@ -82,17 +93,26 @@ function alEnviar(e) {
     const datos = () => resumen(cab, nueva, iCorr, iCorreo);
     const comoQueda = autorizada ? "Ya está publicada en el buscador." : "Quedó pendiente de revisión antes de publicarse.";
 
+    // Archivar o publicar: la respuesta no es una beca, solo cambia "aprobada" de la beca con ese código
+    const iAccion = c(TITULO_ACCION);
+    const accion = iAccion >= 0 ? String(nueva[iAccion] || "").trim() : "";
+    if (accion === ACCION_ARCHIVAR || accion === ACCION_PUBLICAR) {
+      archivarOPublicar(hoja, fila, cab, nueva, accion === ACCION_ARCHIVAR, correo, autorizada);
+      return;
+    }
+
     if (idPedido && autorizada) {
       const ids = hoja.getRange(2, iId + 1, hoja.getLastRow() - 1, 1).getValues().map((r) => String(r[0]).trim().toUpperCase());
       const destino = ids.findIndex((v, i) => v === idPedido && i + 2 !== fila) + 2; // 1 si no se encontró
       if (destino >= 2) {
         // Sobrescribir la fila de ese ID con lo que vino del formulario (sin tocar aprobada/estado/id)
         cab.forEach((h, i) => {
-          if (COLUMNAS_PROPIAS.includes(h) || i === iCorr) return;
+          if (COLUMNAS_PROPIAS.includes(h) || SOLO_FORMULARIO.includes(h) || i === iCorr) return;
           hoja.getRange(destino, i + 1).setValue(nueva[i]);
         });
         if (iCorr >= 0) hoja.getRange(destino, iCorr + 1).clearContent();
         if (iAprob >= 0) hoja.getRange(destino, iAprob + 1).setValue(true); // se publica sola
+        if (c(COL_ARCHIVADA) >= 0) hoja.getRange(destino, c(COL_ARCHIVADA) + 1).clearContent(); // corregida = ya no archivada
         escribirPlazos(hoja, destino);
         hoja.deleteRow(fila);
         asegurarEstado(hoja);
@@ -143,17 +163,58 @@ function completarIdsFaltantes() {
   asegurarEstado(hoja);
 }
 
-// La fórmula de "estado" vive en la fila 2; si se borró esa fila, se vuelve a poner.
-function asegurarEstado(hoja) {
+// La fórmula de "estado" vive en la fila 2; si se borró esa fila, se vuelve a poner. Con forzar=true se reescribe siempre.
+function asegurarEstado(hoja, forzar) {
   const cab = encabezados(hoja);
   const iEst = cab.indexOf("estado"), iAprob = cab.indexOf("aprobada"), iNombre = cab.indexOf("Nombre de la beca");
+  const iArch = cab.indexOf(COL_ARCHIVADA);
   if (iEst < 0) return;
   const celda = hoja.getRange(2, iEst + 1);
-  if (celda.getFormula()) return;
+  if (celda.getFormula() && !forzar) return;
   const L = (i) => letra(i + 1);
+  const rango = (i) => L(i) + '2:' + L(i);
+  const segunAprobada = 'IF(' + rango(iAprob) + '=TRUE,"Publicada","Pendiente de revisión")';
+  const estado = iArch >= 0 ? 'IF(' + rango(iArch) + '<>"","Archivada",' + segunAprobada + ')' : segunAprobada;
   hoja.getRange(2, iEst + 1, hoja.getMaxRows() - 1, 1).clearContent();
-  celda.setFormula('=ARRAYFORMULA(IF(' + L(iNombre) + '2:' + L(iNombre) + '="","",IF(' + L(iAprob) + '2:' + L(iAprob) +
-    '=TRUE,"Publicada","Pendiente de revisión")))');
+  celda.setFormula('=ARRAYFORMULA(IF(' + rango(iNombre) + '="","",' + estado + '))');
+}
+
+// Archiva (aprobada = FALSE, "archivada" = fecha) o publica (aprobada = TRUE) la beca con el código pedido.
+// La respuesta del formulario se borra porque no es una beca. Solo CORREOS_QUE_PUBLICAN pueden hacerlo.
+function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada) {
+  const iId = cab.indexOf("id_beca"), iAprob = cab.indexOf("aprobada"), iArch = cab.indexOf(COL_ARCHIVADA);
+  const iNombre = cab.indexOf(N.nombre), iCodigo = cab.indexOf(TITULO_CODIGO);
+  const codigo = iCodigo >= 0 ? String(nueva[iCodigo] || "").trim().toUpperCase() : "";
+  const verbo = archivar ? "archivar" : "publicar";
+  hoja.deleteRow(fila);
+  asegurarEstado(hoja);
+  if (!autorizada) {
+    avisar(correo, "No se pudo " + verbo + " la beca " + codigo,
+      "Solo Becas para Hondureños puede archivar o publicar becas. No se cambió nada.");
+    return;
+  }
+  const filas = Math.max(hoja.getLastRow() - 1, 1);
+  const ids = hoja.getRange(2, iId + 1, filas, 1).getValues().map((r) => String(r[0]).trim().toUpperCase());
+  const i = codigo ? ids.indexOf(codigo) : -1;
+  if (i < 0) {
+    avisar(correo, "No se pudo " + verbo + " la beca " + codigo,
+      "No encontramos el código " + codigo + ". Revisa que esté escrito igual que al pie de la ficha en el buscador. No se cambió nada.");
+    return;
+  }
+  const destino = i + 2;
+  const nombre = String(hoja.getRange(destino, iNombre + 1).getValue());
+  hoja.getRange(destino, iAprob + 1).setValue(!archivar);
+  if (iArch >= 0) {
+    if (archivar) hoja.getRange(destino, iArch + 1).setValue(new Date());
+    else hoja.getRange(destino, iArch + 1).clearContent();
+  }
+  const copias = [...new Set([correo.toLowerCase(), ...CORREOS_COPIA_CORRECCIONES])].filter(Boolean).join(",");
+  avisar(copias, (archivar ? "Beca archivada: " : "Beca publicada: ") + codigo,
+    codigo + " (" + nombre + ")\n" +
+    (archivar
+      ? "Ya no aparece en el buscador. Sus datos se guardan: para mostrarla de nuevo, elige \"" + ACCION_PUBLICAR + "\" en el formulario."
+      : "Ya aparece en el buscador.") +
+    "\nCambio enviado por: " + correo);
 }
 
 function encabezados(hoja) { return hoja.getRange(1, 1, 1, hoja.getLastColumn()).getValues()[0].map(String); }
@@ -172,7 +233,7 @@ function avisar(correo, asunto, texto) {
 function resumen(cab, fila, iCorr, iCorreo) {
   const zona = Session.getScriptTimeZone();
   return cab.map((h, i) => {
-    if (i === 0 || i === iCorr || i === iCorreo || COLUMNAS_PROPIAS.includes(h)) return null;
+    if (i === 0 || i === iCorr || i === iCorreo || COLUMNAS_PROPIAS.includes(h) || SOLO_FORMULARIO.includes(h)) return null;
     let v = fila[i];
     if (v instanceof Date) v = Utilities.formatDate(v, zona, v.getFullYear() < 1901 ? "HH:mm" : "dd/MM/yyyy"); // 1899 = solo hora
     v = String(v === null || v === undefined ? "" : v).trim();
@@ -365,8 +426,7 @@ function actualizarCampos() {
   const pais = buscar(N.paisViejo) || buscar(N.pais);
   pais.setTitle(N.pais).setHelpText("País donde se estudia. Si son varios, elige una región o \"Varios países\" (al inicio de la lista).");
 
-  const nacionalidades = texto(N.nacionalidades,
-    "Quiénes pueden solicitarla (no es lo mismo que el país de destino). Ej.: Todas las nacionalidades; Centroamérica; Honduras, Guatemala, El Salvador.");
+  const nacionalidades = buscar(N.nacionalidades); // ya no se usa (8 de noviembre): si se borró del formulario, no se vuelve a crear
   const posgrado = casillas(N.posgrado, "Solo si el nivel incluye posgrado.", TIPOS_POSGRADO);
   const edad = FormApp.createTextValidation().requireNumberBetween(10, 100).setHelpText("Escribe solo el número de años.").build();
   const edadMin = texto(N.edadMin, "Si aplica. Solo el número.", edad);
@@ -446,6 +506,7 @@ function actualizarCampos() {
   });
 
   agregarFechaUnica(true); // "Fecha única" va a su propia sección (sin rondas)
+  if (buscar(TITULO_ACCION)) activarArchivar(true); // el orden de arriba movió "¿Qué quieres hacer?": se vuelve a poner primero
   SpreadsheetApp.flush();
   Utilities.sleep(6000); // que aparezcan las columnas nuevas en la hoja
   prepararHoja();
@@ -459,7 +520,7 @@ function prepararHoja() {
   let cab = encabezados(hoja);
   if (cab.indexOf(N.paisViejo) >= 0 && cab.indexOf(N.pais) < 0) hoja.getRange(1, cab.indexOf(N.paisViejo) + 1).setValue(N.pais);
   cab = encabezados(hoja);
-  const faltan = [N.nacionalidades, N.verificado, P(1).fecha].filter((t) => cab.indexOf(t) < 0);
+  const faltan = [N.verificado, P(1).fecha].filter((t) => cab.indexOf(t) < 0);
   if (faltan.length) throw new Error("Todavía no aparecen en la hoja: " + faltan.join(", ") + ". Espera un minuto y ejecuta prepararHoja.");
 
   // Columna "plazos" (la llena el script) al final
@@ -542,7 +603,7 @@ function rehacerPublicadas() {
   const r = (t) => { const i = cab.indexOf(t); if (i < 0) throw new Error("Falta la columna " + t); const L = letra(i + 1); return "Respuestas!" + L + ":" + L; };
   const comoTexto = (t) => "IF(ISNUMBER(" + r(t) + "),TEXT(" + r(t) + ',"yyyy-mm-dd"),' + r(t) + ")";
   const columnas = [
-    ["nombre", r(N.nombre)], ["pais", r(N.pais)], ["nacionalidades", r(N.nacionalidades)], ["nivel", r(N.nivel)],
+    ["nombre", r(N.nombre)], ["pais", r(N.pais)], ["nivel", r(N.nivel)],
     ["tipo_posgrado", r(N.posgrado)], ["area", r(N.area)], ["subarea", r(N.subarea)], ["edad_min", r(N.edadMin)],
     ["edad_max", r(N.edadMax)], ["cobertura", r(N.cobertura)], ["duracion", r(N.duracion)], ["importe_segun", r(N.importe)],
     ["plazas", r(N.plazas)], ["idioma", r(N.idioma)], ["modalidad", r(N.modalidad)], ["tipo_cierre", r(N.tipo)],
@@ -589,7 +650,9 @@ function enlaceParaCorregir(cab, fila, form) {
     const tipo = item.getType();
     let v;
     const deUnica = Object.keys(U).find((k) => U[k] === titulo && k !== "seccion");
-    if (titulo === TITULO_CORREGIR) v = id;
+    if (titulo === TITULO_ACCION) v = ACCION_REGISTRAR;
+    else if (titulo === TITULO_CODIGO) return;
+    else if (titulo === TITULO_CORREGIR) v = id;
     else if (deUnica && !valorDe(cab, fila, U.fecha) && valorDe(cab, fila, N.tipo) === TIPOS_CIERRE[0])
       v = valorDe(cab, fila, P(1)[deUnica]) || (deUnica === "fecha" ? valorDe(cab, fila, N.fechaVieja) : ""); // datos de antes del cambio
     else if (titulo === N.verificado) v = new Date(); // al corregir se está verificando de nuevo
@@ -694,4 +757,78 @@ function probarEnlace() {
   const r = enlaceParaCorregir(encabezados(hoja), hoja.getRange(2, 1, 1, hoja.getLastColumn()).getValues()[0]);
   Logger.log(r.url);
   Logger.log("Sin prellenar: " + (r.faltan.join(", ") || "ninguno"));
+}
+
+/* =====================================================================================================
+ * ARCHIVAR O PUBLICAR DESDE EL FORMULARIO (8 de noviembre): ejecutar UNA vez la función "activarArchivar".
+ *
+ * El formulario empieza con "¿Qué quieres hacer?":
+ *   - Registrar una beca nueva o corregir una  -> sigue igual que antes (sección "Datos de la beca").
+ *   - Archivar una beca (quitarla del buscador) -> solo pide el código y envía. La beca deja de verse en el
+ *     buscador, pero sus datos se quedan en la hoja (columna "archivada" con la fecha, estado "Archivada").
+ *   - Publicar o volver a publicar una beca     -> solo pide el código. Sirve para una beca archivada y
+ *     también para publicar una "Pendiente de revisión" sin abrir la hoja.
+ * Solo los correos de CORREOS_QUE_PUBLICAN pueden archivar o publicar; a cualquier otra persona le llega
+ * un correo diciendo que no se cambió nada.
+ *
+ * También quita la regla que obligaba a escribir "BPH-0000" en "ID de beca a corregir", porque las becas
+ * de las guías tienen códigos como B1AMCA001 o BMEUE+001 y no se podían corregir.
+ *
+ * Se puede volver a ejecutar sin duplicar nada. Si alguna vez se ejecuta "actualizarCampos", esta función
+ * se vuelve a aplicar sola al final.
+ * ===================================================================================================== */
+function activarArchivar(desdeActualizar) {
+  const form = FormApp.openById(IDS_FORMULARIO);
+  const T_ = FormApp.ItemType;
+  const reintentar = (f) => { for (let k = 1; ; k++) { try { return f(); } catch (e) { if (k >= 5) throw e; Utilities.sleep(3000 * k); } } };
+  const items = reintentar(() => form.getItems());
+  const buscar = (titulo, tipo) => items.find((i) => i.getTitle() === titulo && (!tipo || i.getType() === tipo)) || null;
+  const mover = (it, a) => reintentar(() => { if (it.getIndex() !== a) form.moveItem(it.getIndex(), a); });
+  const ultimo = () => reintentar(() => form.getItems().length) - 1;
+
+  // 1. Sección final: solo el código de la beca
+  let pbArch = buscar(SECCION_ARCHIVAR, T_.PAGE_BREAK);
+  if (!pbArch) pbArch = form.addPageBreakItem().setTitle(SECCION_ARCHIVAR)
+    .setHelpText("Escribe el código que aparece al pie de la ficha en el buscador (por ejemplo BPH-0007 o B1AMCA001) y envía.");
+  let codigo = buscar(TITULO_CODIGO, T_.TEXT);
+  if (!codigo) codigo = form.addTextItem().setTitle(TITULO_CODIGO).setRequired(true);
+  mover(pbArch, ultimo());
+  mover(codigo, ultimo());
+  // Quien llega al final de las fechas límite envía: nunca cae en esta sección por accidente
+  pbArch.asPageBreakItem().setGoToPage(FormApp.PageNavigationType.SUBMIT);
+
+  // 2. Primera sección: "¿Qué quieres hacer?" y después el salto a "Datos de la beca"
+  let pbDatos = buscar(SECCION_DATOS, T_.PAGE_BREAK);
+  if (!pbDatos) pbDatos = form.addPageBreakItem().setTitle(SECCION_DATOS);
+  let accion = buscar(TITULO_ACCION, T_.MULTIPLE_CHOICE);
+  if (!accion) accion = form.addMultipleChoiceItem().setTitle(TITULO_ACCION).setRequired(true);
+  mover(accion, 0);
+  mover(pbDatos, 1);
+  const mc = accion.asMultipleChoiceItem();
+  mc.setChoices([
+    mc.createChoice(ACCION_REGISTRAR, pbDatos.asPageBreakItem()),
+    mc.createChoice(ACCION_ARCHIVAR, pbArch.asPageBreakItem()),
+    mc.createChoice(ACCION_PUBLICAR, pbArch.asPageBreakItem()),
+  ]);
+
+  // 3. "ID de beca a corregir" acepta cualquier código (no solo BPH-0000)
+  const corr = buscar(TITULO_CORREGIR, T_.TEXT);
+  if (corr) corr.asTextItem().clearValidation().setHelpText("Déjalo VACÍO si es una beca nueva. Para corregir una beca, escribe su código " +
+    "(aparece al pie de la ficha en el buscador, por ejemplo BPH-0007 o B1AMCA001) y llena todo de nuevo: la beca se reemplaza con estos datos.");
+
+  if (desdeActualizar === true) return;
+
+  // 4. Hoja: columna "archivada", estado con "Archivada" y Publicadas armada por nombre de columna
+  SpreadsheetApp.flush();
+  Utilities.sleep(6000); // que aparezcan las columnas nuevas del formulario
+  const hoja = SpreadsheetApp.openById(IDS_HOJA).getSheetByName("Respuestas");
+  if (encabezados(hoja).indexOf(COL_ARCHIVADA) < 0) {
+    const n = hoja.getLastColumn() + 1;
+    if (hoja.getMaxColumns() < n) hoja.insertColumnsAfter(hoja.getMaxColumns(), 1);
+    hoja.getRange(1, n).setValue(COL_ARCHIVADA).setFontWeight("bold").setBackground("#e8f0fe");
+    hoja.getRange(2, n, hoja.getMaxRows() - 1, 1).setNumberFormat("dd/mm/yyyy");
+  }
+  asegurarEstado(hoja, true);
+  rehacerPublicadas();
+  Logger.log("Listo: el formulario ya permite archivar y publicar becas por código.");
 }
