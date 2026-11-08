@@ -29,15 +29,22 @@
 <div class="wrap">
   <div class="controles">
     <div class="vista tema" role="group" aria-label="Modo de color">
-      <button type="button" data-tema="light" aria-pressed="false">Claro</button>
-      <button type="button" data-tema="dark" aria-pressed="false">Oscuro</button>
+      <button type="button" data-tema="light" aria-pressed="false" aria-label="Modo claro" title="Modo claro"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg></button>
+      <button type="button" data-tema="dark" aria-pressed="false" aria-label="Modo oscuro" title="Modo oscuro"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z"/></svg></button>
     </div>
     <div class="vista" role="group" aria-label="Vista de la página">
-      <button type="button" data-vista="celular" aria-pressed="true">Celular</button>
-      <button type="button" data-vista="web" aria-pressed="false">Web</button>
+      <button type="button" data-vista="celular" aria-pressed="true" aria-label="Vista celular" title="Vista celular"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg></button>
+      <button type="button" data-vista="web" aria-pressed="false" aria-label="Vista computadora" title="Vista computadora"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4" width="19" height="12.5" rx="1.5"/><path d="M8.5 20.5h7M12 16.5v4"/></svg></button>
     </div>
   </div>
   <p class="intro">Becas revisadas por nuestro equipo. Filtra por lo que te interesa y abre la convocatoria oficial.</p>
+
+  <aside class="nota" aria-label="Cobertura completa o parcial">
+    <p><strong>¿Completa o parcial?</strong> Cada beca define su cobertura de forma distinta.</p>
+    <p><b>Completa</b> suele cubrir matrícula, manutención, pasajes de avión y otros gastos, pero lo que incluye varía según la convocatoria.</p>
+    <p><b>Parcial</b> cubre solo una parte, por ejemplo la matrícula o un porcentaje de ella.</p>
+    <p>Revisa siempre la convocatoria oficial para saber qué cubre.</p>
+  </aside>
 
   <p class="aviso" id="aviso-ejemplo" hidden>Estás viendo datos de ejemplo ficticios. Estas becas no existen.</p>
 
@@ -46,7 +53,7 @@
     <label class="chip-toggle" for="abiertas"><input type="checkbox" id="abiertas"> Solo abiertas</label>
   </div>
 
-  <details class="filtros">
+  <details class="filtros" open>
     <summary>Filtros</summary>
     <div class="filtros-grid">
       <label for="f-nivel">Nivel <select id="f-nivel"><option value="">Todos</option></select></label>

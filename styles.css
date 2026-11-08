@@ -54,6 +54,12 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(
 .vista { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 3px; }
 .vista button { font: inherit; font-size: .85rem; font-weight: 700; border: 0; border-radius: 999px; padding: 6px 14px; background: none; color: var(--muted); cursor: pointer; }
 .vista button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.vista button { display: inline-grid; place-items: center; padding: 6px 12px; }
+.vista svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.nota { margin: 0; background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--gold); border-radius: var(--radius); padding: 12px 16px; font-size: .92rem; color: var(--ink); display: grid; gap: 4px; }
+.nota p { margin: 0; }
+.nota strong { color: var(--ink); }
+.codigo { margin: 0; font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 :root[data-vista="celular"] .wrap, :root[data-vista="celular"] .marca-in { max-width: 480px; }
 :root[data-vista="celular"] .lista { grid-template-columns: 1fr; }
 :root[data-vista="web"] .marca img { width: 168px; height: 168px; }

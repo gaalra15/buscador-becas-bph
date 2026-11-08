@@ -27,6 +27,7 @@ const COLUMNAS = {
   plazas: "plazas",
   plazos: "plazos",
   verificado: "verificado",
+  id: "id", // código de la beca (BPH-0001, B1AMCA001…), se muestra al pie de cada ficha
 };
 
 // Días antes del cierre en que la beca se marca como "Cierra pronto".

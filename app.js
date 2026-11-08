@@ -204,6 +204,7 @@
       const a = el("a", "ir", "Ver convocatoria oficial"); a.href = b.enlace; a.target = "_blank"; a.rel = "noopener";
       pie.append(a);
     }
+    if (b.id) pie.append(el("p", "codigo", "Código: " + b.id)); // para ubicar la beca en la hoja y corregirla por ID
     cuerpo.append(pie);
     li.append(cuerpo);
     return li;
@@ -216,7 +217,7 @@
     const res = becas.filter((b) => {
       if (soloAbiertas && !b.estado.abierta) return false;
       for (const f of FILTROS) if (sel[f] && !valores(b, f).some((v) => norm(v) === sel[f])) return false;
-      if (q && !norm([b.nombre, b.pais, b.nacionalidades, b.nivel, b.tipoPosgrado, b.area, b.subarea, b.cobertura, b.idioma, b.modalidad].join(" ")).includes(q)) return false;
+      if (q && !norm([b.id, b.nombre, b.pais, b.nacionalidades, b.nivel, b.tipoPosgrado, b.area, b.subarea, b.cobertura, b.idioma, b.modalidad].join(" ")).includes(q)) return false;
       return true;
     });
     const lista = $("#lista"); lista.replaceChildren(...res.map(tarjeta));
