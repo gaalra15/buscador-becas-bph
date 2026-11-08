@@ -1,0 +1,432 @@
+/**
+ * IDs de beca y correcciones desde el formulario (reemplaza a ids-automaticos.gs).
+ *
+ * Qué hace:
+ *   - Cada beca nueva que llega por el formulario recibe un ID (BPH-0463, BPH-0464, …) en la columna "id_beca".
+ *   - A quien la envió le llega un correo con ese ID.
+ *   - Si alguien se equivocó, vuelve a llenar el formulario y pone el ID en la pregunta "ID de beca a corregir":
+ *     la fila de ese ID se SOBREESCRIBE con los datos nuevos y la respuesta repetida se borra.
+ *   - Lo que envía un correo de CORREOS_QUE_PUBLICAN (Jenny) se marca "aprobada" y se publica solo.
+ *     Lo que envía cualquier otra persona queda "Pendiente de revisión", y solo esos correos pueden corregir por ID.
+ *   - El formulario pide iniciar sesión con Google, así nadie puede escribir el correo de Jenny haciéndose pasar por ella.
+ *
+ * Campos nuevos (15 de octubre): pega este archivo completo y ejecuta "actualizarCampos" una vez (ver abajo).
+ *
+ * Cómo usarlo (una sola vez):
+ *   script.google.com (cuenta raudalesg99@gmail.com) > Nuevo proyecto > pega este archivo > Guardar >
+ *   elige la función "configurarIds" > Ejecutar > acepta los permisos (incluye enviar correos).
+ */
+const IDS_FORMULARIO = "1Eh02U-z-BddnM5JcXh4vhYgvagMu1H1c1AS2bWNwfm4";
+const IDS_HOJA = "1rzRIiZHC14KqA4zYR-TMpgCVQ5k6dEJOI2XWYQsE8Qw";
+const IDS_PREFIJO = "BPH-";
+const TITULO_CORREGIR = "ID de beca a corregir";
+// Correos que publican solos y pueden corregir por ID (en minúsculas).
+// raudalesg99@gmail.com está solo para las pruebas: quitarlo cuando se le entregue a Jenny.
+const CORREOS_QUE_PUBLICAN = ["becasparahn@gmail.com", "raudalesg99@gmail.com"];
+// Quién recibe copia de cada corrección. Durante las pruebas solo Mariaj; al entregar, cambiar a ["becasparahn@gmail.com"].
+const CORREOS_COPIA_CORRECCIONES = ["raudalesg99@gmail.com"];
+const COLUMNAS_PROPIAS = ["aprobada", "estado", "id_beca", "plazos"]; // columnas de la hoja que no vienen del formulario
+
+function configurarIds() {
+  const form = FormApp.openById(IDS_FORMULARIO);
+
+  // Pregunta opcional al inicio para corregir una beca ya enviada
+  let item = form.getItems().find((i) => i.getTitle() === TITULO_CORREGIR);
+  if (!item) {
+    item = form.addTextItem().setTitle(TITULO_CORREGIR)
+      .setHelpText("Déjalo VACÍO si es una beca nueva. Si te equivocaste en una beca que ya enviaste, escribe aquí su ID " +
+        "(por ejemplo BPH-0463) y llena todo de nuevo: la beca anterior se reemplaza con estos datos.")
+      .setValidation(FormApp.createTextValidation()
+        .requireTextMatchesPattern("^\\s*([Bb][Pp][Hh]-\\d{4})?\\s*$")
+        .setHelpText("Usa el formato BPH-0000, o déjalo vacío.").build())
+      .setRequired(false);
+  }
+  form.moveItem(item.getIndex(), 0);
+
+  // Pedir el correo verificado (iniciar sesión con Google) para mandar el ID y saber quién publica
+  try { form.setEmailCollectionType(FormApp.EmailCollectionType.VERIFIED); }
+  catch (e) { form.setCollectEmail(true); }
+  form.setConfirmationMessage("¡Gracias! Te enviamos un correo con el ID de esta beca (BPH-…). Guárdalo: si te equivocaste, " +
+    "vuelve a llenar el formulario y escribe ese ID en la primera pregunta para corregirla.");
+
+  // Disparador: un solo "alEnviar" (quita los de versiones anteriores)
+  ScriptApp.getProjectTriggers()
+    .filter((t) => ["alEnviar", "asignarIds"].includes(t.getHandlerFunction()))
+    .forEach((t) => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger("alEnviar").forSpreadsheet(IDS_HOJA).onFormSubmit().create();
+
+  SpreadsheetApp.flush();
+  Utilities.sleep(4000); // que aparezcan las columnas nuevas
+  completarIdsFaltantes();
+  Logger.log("Listo: IDs automáticos, correo con el ID y correcciones por ID activados.");
+}
+
+// Se ejecuta sola con cada respuesta del formulario.
+function alEnviar(e) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const hoja = e.range.getSheet();
+    const fila = e.range.getRow();
+    const cab = encabezados(hoja);
+    const ancho = cab.length;
+    const nueva = hoja.getRange(fila, 1, 1, ancho).getValues()[0];
+    const c = (titulo) => cab.indexOf(titulo); // índice 0-based o -1
+    const iId = c("id_beca"), iAprob = c("aprobada"), iCorr = c(TITULO_CORREGIR);
+    const iNombre = c("Nombre de la beca");
+    const iCorreo = cab.findIndex((h) => /correo|email/i.test(h));
+    const nombre = String(nueva[iNombre] || "");
+    const correo = iCorreo >= 0 ? String(nueva[iCorreo] || "").trim() : "";
+    const autorizada = CORREOS_QUE_PUBLICAN.includes(correo.toLowerCase());
+    const idPedido = iCorr >= 0 ? String(nueva[iCorr] || "").trim().toUpperCase() : "";
+    const datos = () => resumen(cab, nueva, iCorr, iCorreo);
+    const comoQueda = autorizada ? "Ya está publicada en el buscador." : "Quedó pendiente de revisión antes de publicarse.";
+
+    if (idPedido && autorizada) {
+      const ids = hoja.getRange(2, iId + 1, hoja.getLastRow() - 1, 1).getValues().map((r) => String(r[0]).trim().toUpperCase());
+      const destino = ids.findIndex((v, i) => v === idPedido && i + 2 !== fila) + 2; // 1 si no se encontró
+      if (destino >= 2) {
+        // Sobrescribir la fila de ese ID con lo que vino del formulario (sin tocar aprobada/estado/id)
+        cab.forEach((h, i) => {
+          if (COLUMNAS_PROPIAS.includes(h) || i === iCorr) return;
+          hoja.getRange(destino, i + 1).setValue(nueva[i]);
+        });
+        if (iCorr >= 0) hoja.getRange(destino, iCorr + 1).clearContent();
+        if (iAprob >= 0) hoja.getRange(destino, iAprob + 1).setValue(true); // se publica sola
+        escribirPlazos(hoja, destino);
+        hoja.deleteRow(fila);
+        asegurarEstado(hoja);
+        const copias = [...new Set([correo.toLowerCase(), ...CORREOS_COPIA_CORRECCIONES])].filter(Boolean).join(",");
+        avisar(copias, "Beca corregida: " + idPedido,
+          "Se reemplazaron los datos de la beca " + idPedido + " (" + nombre + ").\nCorrección enviada por: " + correo + "\n" +
+          "Ya está publicada con los datos nuevos.\n\nAsí quedó registrada:\n" + datos());
+        return;
+      }
+    }
+
+    // Beca nueva (o corrección que no se pudo aplicar)
+    let aviso = "";
+    if (idPedido) {
+      aviso = autorizada
+        ? "No encontramos el ID " + idPedido + ", así que esta beca se guardó como nueva.\n\n"
+        : "Solo Becas para Hondureños puede corregir becas por ID, así que esta respuesta se guardó como beca nueva.\n\n";
+    }
+    const nuevoId = siguienteId(hoja, iId);
+    hoja.getRange(fila, iId + 1).setValue(nuevoId);
+    if (iAprob >= 0) hoja.getRange(fila, iAprob + 1).setValue(autorizada); // solo se publica sola si la envía BpH
+    escribirPlazos(hoja, fila);
+    asegurarEstado(hoja);
+    avisar(correo, "Beca registrada: " + nuevoId,
+      aviso + "ID: " + nuevoId + "\n" + comoQueda + "\n\nLo que registraste:\n" + datos() + "\n\n" +
+      (autorizada
+        ? "Revisa los datos y guarda este ID. Si te equivocaste, vuelve a llenar el formulario y escribe este ID en la primera pregunta: " +
+          "la beca se reemplaza con los datos nuevos."
+        : "Guarda este ID por si necesitas consultarlo."));
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Pone ID a cualquier fila con nombre que todavía no tenga.
+function completarIdsFaltantes() {
+  const hoja = SpreadsheetApp.openById(IDS_HOJA).getSheetByName("Respuestas");
+  const cab = encabezados(hoja);
+  const iId = cab.indexOf("id_beca"), iNombre = cab.indexOf("Nombre de la beca");
+  const filas = hoja.getLastRow() - 1;
+  if (iId < 0 || iNombre < 0 || filas < 1) return;
+  const nombres = hoja.getRange(2, iNombre + 1, filas, 1).getValues();
+  const rango = hoja.getRange(2, iId + 1, filas, 1);
+  const ids = rango.getValues();
+  let mayor = mayorId(ids), cambios = 0;
+  ids.forEach((r, i) => { if (!r[0] && String(nombres[i][0]).trim()) { r[0] = formatoId(++mayor); cambios++; } });
+  if (cambios) rango.setValues(ids);
+  asegurarEstado(hoja);
+}
+
+// La fórmula de "estado" vive en la fila 2; si se borró esa fila, se vuelve a poner.
+function asegurarEstado(hoja) {
+  const cab = encabezados(hoja);
+  const iEst = cab.indexOf("estado"), iAprob = cab.indexOf("aprobada"), iNombre = cab.indexOf("Nombre de la beca");
+  if (iEst < 0) return;
+  const celda = hoja.getRange(2, iEst + 1);
+  if (celda.getFormula()) return;
+  const L = (i) => letra(i + 1);
+  hoja.getRange(2, iEst + 1, hoja.getMaxRows() - 1, 1).clearContent();
+  celda.setFormula('=ARRAYFORMULA(IF(' + L(iNombre) + '2:' + L(iNombre) + '="","",IF(' + L(iAprob) + '2:' + L(iAprob) +
+    '=TRUE,"Publicada","Pendiente de revisión")))');
+}
+
+function encabezados(hoja) { return hoja.getRange(1, 1, 1, hoja.getLastColumn()).getValues()[0].map(String); }
+function mayorId(valores) {
+  let m = 0;
+  valores.forEach(([v]) => { const x = String(v).match(/(\d+)$/); if (x) m = Math.max(m, Number(x[1])); });
+  return m;
+}
+function siguienteId(hoja, iId) { return formatoId(mayorId(hoja.getRange(2, iId + 1, hoja.getLastRow() - 1, 1).getValues()) + 1); }
+function formatoId(n) { return IDS_PREFIJO + String(n).padStart(4, "0"); }
+function avisar(correo, asunto, texto) {
+  if (!correo || !/@/.test(correo)) return;
+  MailApp.sendEmail(correo, asunto + " · Buscador de becas BpH", texto + "\n\nBecas para Hondureños");
+}
+// Lista "Pregunta: respuesta" de todo lo que se envió (sin marca temporal, correo ni columnas propias de la hoja).
+function resumen(cab, fila, iCorr, iCorreo) {
+  const zona = Session.getScriptTimeZone();
+  return cab.map((h, i) => {
+    if (i === 0 || i === iCorr || i === iCorreo || COLUMNAS_PROPIAS.includes(h)) return null;
+    let v = fila[i];
+    if (v instanceof Date) v = Utilities.formatDate(v, zona, v.getFullYear() < 1901 ? "HH:mm" : "dd/MM/yyyy"); // 1899 = solo hora
+    v = String(v === null || v === undefined ? "" : v).trim();
+    if (!v && (/^Plazo \d|^¿Agregar/.test(h) || h === N.fechaVieja || h === N.variasVieja)) return null; // secciones que no se usaron
+    return "- " + h + ": " + (v || "(vacío)");
+  }).filter(Boolean).join("\n");
+}
+function letra(n) {
+  let s = "";
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+/* =====================================================================================================
+ * CAMPOS NUEVOS (15 de octubre): ejecutar UNA vez la función "actualizarCampos".
+ *
+ * Fechas límite sin duplicar becas: cada beca sigue siendo UNA fila. El formulario tiene hasta
+ * MAX_PLAZOS secciones "Fecha límite N" (ronda, tipo de plazo, fecha, hora, zona horaria, periodo de
+ * ingreso, confirmada/estimada). Al final de cada una pregunta si hay otra fecha. El script junta esas
+ * columnas en la columna "plazos" (texto JSON) que lee el buscador.
+ * ===================================================================================================== */
+const MAX_PLAZOS = 4;
+const TIPOS_CIERRE = ["Fecha única", "Varias rondas o fechas", "Solo mes", "Abierta todo el año", "Sin fecha publicada"];
+const CIERRE_VIEJO_A_NUEVO = { "fecha": "Fecha única", "varias fechas": "Varias rondas o fechas", "solo mes": "Solo mes", "abierta todo el año": "Abierta todo el año" };
+const TIPOS_PLAZO = ["Solicitud de beca", "Admisión universitaria", "Nominación", "Entrega de documentación"];
+const PERIODOS_INGRESO = ["Primavera", "Otoño", "Año académico", "No especificado"];
+const TIPOS_POSGRADO = ["Máster", "Doctorado", "Otros estudios de posgrado"];
+const DURACIONES = ["1 año", "2 años", "3 años", "4 años", "Duración del programa", "Variable", "No especificada"];
+const IMPORTE_SEGUN = ["Necesidad económica", "Mérito académico", "Evaluación individual", "Monto fijo", "No especificado"];
+const MESES_CIERRE = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+// Títulos (= encabezados en la hoja)
+const N = {
+  nombre: "Nombre de la beca", paisViejo: "País", pais: "País de destino", nacionalidades: "Nacionalidades elegibles",
+  nivel: "Nivel", posgrado: "Tipo de posgrado", area: "Área de estudio", subarea: "Subárea o tema específico",
+  edadMin: "Edad mínima", edadMax: "Edad máxima", cobertura: "Cobertura", duracion: "Duración de la financiación",
+  importe: "El importe depende de", plazas: "Número de plazas", idioma: "Idioma", modalidad: "Modalidad",
+  enlace: "Enlace oficial", verificado: "Fecha de última verificación", tipo: "Tipo de cierre", mes: "Mes de cierre",
+  fechaVieja: "Fecha de cierre", variasVieja: "Fechas de cierre",
+};
+const P = (n) => ({
+  seccion: "Fecha límite " + n,
+  ronda: "Plazo " + n + ": nombre de la ronda",
+  tipo: "Plazo " + n + ": tipo de plazo",
+  fecha: "Plazo " + n + ": fecha",
+  hora: "Plazo " + n + ": hora límite",
+  zona: "Plazo " + n + ": zona horaria",
+  ingreso: "Plazo " + n + ": periodo de ingreso",
+  estado: "Plazo " + n + ": fecha confirmada o estimada",
+  otra: "¿Agregar la fecha límite " + (n + 1) + "?",
+});
+
+function actualizarCampos() {
+  const form = FormApp.openById(IDS_FORMULARIO);
+  const T_ = FormApp.ItemType;
+  const comoPB = (x) => x.asPageBreakItem ? x.asPageBreakItem() : x;   // Item genérico o PageBreakItem
+  const comoMC = (x) => x.asMultipleChoiceItem ? x.asMultipleChoiceItem() : x;
+  const buscar = (titulo, tipo) => form.getItems().find((i) => i.getTitle() === titulo && (!tipo || i.getType() === tipo));
+  const texto = (titulo, ayuda, validacion) => {
+    let it = buscar(titulo, T_.TEXT);
+    if (!it) { it = form.addTextItem().setTitle(titulo).setRequired(false); if (validacion) it.asTextItem().setValidation(validacion); }
+    if (ayuda) it.setHelpText(ayuda);
+    return it;
+  };
+  const casillas = (titulo, ayuda, opciones) => buscar(titulo, T_.CHECKBOX) ||
+    form.addCheckboxItem().setTitle(titulo).setHelpText(ayuda).setChoiceValues(opciones).setRequired(false);
+  const lista = (titulo, ayuda, opciones, obligatoria) => buscar(titulo, T_.LIST) ||
+    form.addListItem().setTitle(titulo).setHelpText(ayuda).setChoiceValues(opciones).setRequired(!!obligatoria);
+
+  form.setDescription("Formulario para cargar y corregir becas del buscador de Becas para Hondureños.");
+
+  // País -> País de destino (mismo item, mismas respuestas)
+  const pais = buscar(N.paisViejo) || buscar(N.pais);
+  pais.setTitle(N.pais).setHelpText("País donde se estudia. Si son varios, elige una región o \"Varios países\" (al inicio de la lista).");
+
+  const nacionalidades = texto(N.nacionalidades,
+    "Quiénes pueden solicitarla (no es lo mismo que el país de destino). Ej.: Todas las nacionalidades; Centroamérica; Honduras, Guatemala, El Salvador.");
+  const posgrado = casillas(N.posgrado, "Solo si el nivel incluye posgrado.", TIPOS_POSGRADO);
+  const edad = FormApp.createTextValidation().requireNumberBetween(10, 100).setHelpText("Escribe solo el número de años.").build();
+  const edadMin = texto(N.edadMin, "Si aplica. Solo el número.", edad);
+  const edadMax = texto(N.edadMax, "Si aplica. Solo el número.", edad);
+  const duracion = buscar(N.duracion, T_.MULTIPLE_CHOICE) || form.addMultipleChoiceItem().setTitle(N.duracion)
+    .setHelpText("Cuánto tiempo cubre la financiación.").setChoiceValues(DURACIONES).showOtherOption(true).setRequired(false);
+  const importe = casillas(N.importe, "Si el monto cambia según la persona, marca de qué depende.", IMPORTE_SEGUN);
+  const plazas = texto(N.plazas, "Solo si la convocatoria lo publica.",
+    FormApp.createTextValidation().requireWholeNumber().setHelpText("Escribe solo el número.").build());
+  const verificado = buscar(N.verificado, T_.DATE) || form.addDateItem().setTitle(N.verificado)
+    .setHelpText("Fecha en que revisaste la convocatoria oficial.").setRequired(true);
+  buscar(N.idioma).setHelpText("Solo idiomas de enseñanza confirmados para los programas elegibles.");
+
+  // Quitar las preguntas de fecha viejas (sus columnas y datos se quedan en la hoja)
+  [buscar(N.fechaVieja, T_.DATE), buscar(N.fechaVieja, T_.PAGE_BREAK), buscar(N.variasVieja, T_.TEXT),
+   buscar("Varias fechas de cierre", T_.PAGE_BREAK)].forEach((it) => { if (it) form.deleteItem(it); });
+
+  // Secciones de fechas límite
+  const pbMes = buscar(N.mes, T_.PAGE_BREAK);
+  const mes = buscar(N.mes, T_.LIST);
+  const secciones = [];
+  for (let n = 1; n <= MAX_PLAZOS; n++) {
+    const p = P(n);
+    let pb = buscar(p.seccion, T_.PAGE_BREAK);
+    const items = [];
+    if (!pb) {
+      pb = form.addPageBreakItem().setTitle(p.seccion)
+        .setHelpText(n === 1 ? "Si hay varias fechas (rondas, nominación, admisión, documentos…), registra una por sección." : "");
+      items.push(form.addTextItem().setTitle(p.ronda).setHelpText("Ej.: Early Decision, Regular Decision, Segunda convocatoria. Opcional.").setRequired(false));
+      items.push(form.addListItem().setTitle(p.tipo).setChoiceValues(TIPOS_PLAZO).setRequired(true));
+      items.push(form.addDateItem().setTitle(p.fecha).setRequired(true));
+      items.push(form.addTimeItem().setTitle(p.hora).setHelpText("Solo si se publica.").setRequired(false));
+      items.push(form.addTextItem().setTitle(p.zona).setHelpText("Solo si se publica la hora. Ej.: hora de Honduras, CET, ET (EE. UU.).").setRequired(false));
+      items.push(form.addListItem().setTitle(p.ingreso).setChoiceValues(PERIODOS_INGRESO).setRequired(false));
+      items.push(form.addMultipleChoiceItem().setTitle(p.estado).setChoiceValues(["Confirmada", "Estimada"]).setRequired(true));
+      if (n < MAX_PLAZOS) items.push(form.addMultipleChoiceItem().setTitle(p.otra).setRequired(true));
+    } else {
+      [p.ronda, p.tipo, p.fecha, p.hora, p.zona, p.ingreso, p.estado, p.otra].forEach((t) => { const it = buscar(t); if (it) items.push(it); });
+    }
+    secciones.push({ pb, items });
+  }
+  // Navegación: "¿Agregar otra?" Sí -> siguiente sección, No -> enviar. Después de "Mes de cierre" -> enviar.
+  secciones.forEach((s, i) => {
+    const otra = s.items.find((it) => it.getTitle() === P(i + 1).otra);
+    if (otra) {
+      const mc = comoMC(otra);
+      mc.setChoices([mc.createChoice("Sí", comoPB(secciones[i + 1].pb)), mc.createChoice("No", FormApp.PageNavigationType.SUBMIT)]);
+    }
+  });
+  comoPB(secciones[0].pb).setGoToPage(FormApp.PageNavigationType.SUBMIT);
+
+  // Tipo de cierre con las opciones nuevas
+  if (!pbMes || !mes) throw new Error("No encontré la sección \"" + N.mes + "\" en el formulario.");
+  const tipo = comoMC(buscar(N.tipo, T_.MULTIPLE_CHOICE));
+  tipo.setHelpText("Fecha única y Varias rondas te llevan a registrar cada fecha límite.").setChoices([
+    tipo.createChoice(TIPOS_CIERRE[0], comoPB(secciones[0].pb)),
+    tipo.createChoice(TIPOS_CIERRE[1], comoPB(secciones[0].pb)),
+    tipo.createChoice(TIPOS_CIERRE[2], comoPB(pbMes)),
+    tipo.createChoice(TIPOS_CIERRE[3], FormApp.PageNavigationType.SUBMIT),
+    tipo.createChoice(TIPOS_CIERRE[4], FormApp.PageNavigationType.SUBMIT),
+  ]);
+
+  // Orden final de la primera sección y luego las secciones
+  const primero = [buscar(TITULO_CORREGIR), buscar(N.nombre), pais, nacionalidades, buscar(N.nivel), posgrado, buscar(N.area),
+    buscar(N.subarea), edadMin, edadMax, buscar(N.cobertura), duracion, importe, plazas, buscar(N.idioma), buscar(N.modalidad),
+    buscar(N.enlace), verificado].filter(Boolean);
+  const ids = new Set();
+  const orden = [...primero];
+  const resto = [tipo, pbMes, mes].concat(...secciones.map((s) => [s.pb, ...s.items]));
+  [...orden, ...resto].forEach((it) => ids.add(it.getId()));
+  form.getItems().forEach((it) => { if (!ids.has(it.getId())) orden.push(it); }); // preguntas que no conozco: quedan en la 1ª sección
+  [...orden, ...resto].forEach((it, i) => form.moveItem(it.getIndex(), i));
+
+  SpreadsheetApp.flush();
+  Utilities.sleep(6000); // que aparezcan las columnas nuevas en la hoja
+  prepararHoja();
+  Logger.log("Listo: formulario y hoja actualizados.");
+}
+
+// Se puede volver a ejecutar sola: encabezados, listas, valores viejos de "Tipo de cierre", columna plazos y Publicadas.
+function prepararHoja() {
+  const libro = SpreadsheetApp.openById(IDS_HOJA);
+  const hoja = libro.getSheetByName("Respuestas");
+  let cab = encabezados(hoja);
+  if (cab.indexOf(N.paisViejo) >= 0 && cab.indexOf(N.pais) < 0) hoja.getRange(1, cab.indexOf(N.paisViejo) + 1).setValue(N.pais);
+  cab = encabezados(hoja);
+  const faltan = [N.nacionalidades, N.verificado, P(1).fecha].filter((t) => cab.indexOf(t) < 0);
+  if (faltan.length) throw new Error("Todavía no aparecen en la hoja: " + faltan.join(", ") + ". Espera un minuto y ejecuta prepararHoja.");
+
+  // Columna "plazos" (la llena el script) al final
+  if (cab.indexOf("plazos") < 0) {
+    const n = hoja.getLastColumn() + 1;
+    if (hoja.getMaxColumns() < n) hoja.insertColumnsAfter(hoja.getMaxColumns(), 1);
+    hoja.getRange(1, n).setValue("plazos").setFontWeight("bold").setBackground("#e8f0fe");
+    cab = encabezados(hoja);
+  }
+  const ultima = hoja.getMaxRows();
+  const col = (t) => cab.indexOf(t) + 1;
+  const regla = (t, opciones, libre) => { if (col(t)) hoja.getRange(2, col(t), ultima - 1, 1).setDataValidation(
+    SpreadsheetApp.newDataValidation().requireValueInList(opciones, true).setAllowInvalid(!!libre).build()); };
+  const fecha = (t) => { if (col(t)) hoja.getRange(2, col(t), ultima - 1, 1).setDataValidation(
+    SpreadsheetApp.newDataValidation().requireDate().setAllowInvalid(false).build()); };
+
+  // Tipo de cierre: valores viejos -> nuevos
+  const iTipo = col(N.tipo);
+  const tipos = hoja.getRange(2, iTipo, ultima - 1, 1).getValues();
+  let cambio = false;
+  tipos.forEach((r) => { const nuevo = CIERRE_VIEJO_A_NUEVO[String(r[0]).trim().toLowerCase()]; if (nuevo) { r[0] = nuevo; cambio = true; } });
+  if (cambio) hoja.getRange(2, iTipo, ultima - 1, 1).setValues(tipos);
+
+  regla(N.tipo, TIPOS_CIERRE);
+  regla(N.posgrado, TIPOS_POSGRADO, true);
+  regla(N.duracion, DURACIONES, true);
+  regla(N.importe, IMPORTE_SEGUN, true);
+  regla(N.mes, MESES_CIERRE);
+  fecha(N.verificado);
+  for (let n = 1; n <= MAX_PLAZOS; n++) {
+    regla(P(n).tipo, TIPOS_PLAZO); regla(P(n).ingreso, PERIODOS_INGRESO); regla(P(n).estado, ["Confirmada", "Estimada"]); fecha(P(n).fecha);
+  }
+
+  recalcularPlazos();
+  rehacerPublicadas();
+}
+
+// Junta las columnas de fechas límite de una fila en un texto JSON para el buscador.
+function plazosDeFila(cab, fila) {
+  const zona = Session.getScriptTimeZone();
+  const v = (t) => { const i = cab.indexOf(t); return i < 0 ? "" : fila[i]; };
+  const dia = (x) => x instanceof Date ? Utilities.formatDate(x, zona, "yyyy-MM-dd") : String(x || "").trim();
+  const hora = (x) => x instanceof Date ? Utilities.formatDate(x, zona, "HH:mm") : String(x || "").trim();
+  const lista = [];
+  for (let n = 1; n <= MAX_PLAZOS; n++) {
+    const p = P(n);
+    const f = dia(v(p.fecha));
+    if (!f) continue;
+    lista.push({ ronda: String(v(p.ronda)).trim(), tipo: String(v(p.tipo)).trim(), fecha: f, hora: hora(v(p.hora)),
+      zona: String(v(p.zona)).trim(), ingreso: String(v(p.ingreso)).trim(), estado: String(v(p.estado)).trim() });
+  }
+  return lista.length ? JSON.stringify(lista) : "";
+}
+function escribirPlazos(hoja, fila) {
+  const cab = encabezados(hoja);
+  const iPl = cab.indexOf("plazos");
+  if (iPl < 0) return;
+  const valores = hoja.getRange(fila, 1, 1, cab.length).getValues()[0];
+  hoja.getRange(fila, iPl + 1).setValue(plazosDeFila(cab, valores));
+}
+function recalcularPlazos() {
+  const hoja = SpreadsheetApp.openById(IDS_HOJA).getSheetByName("Respuestas");
+  const cab = encabezados(hoja);
+  const iPl = cab.indexOf("plazos");
+  const filas = hoja.getLastRow() - 1;
+  if (iPl < 0 || filas < 1) return;
+  const datos = hoja.getRange(2, 1, filas, cab.length).getValues();
+  hoja.getRange(2, iPl + 1, filas, 1).setValues(datos.map((r) => [plazosDeFila(cab, r)]));
+}
+
+// Pestaña Publicadas: solo aprobadas, con los encabezados que lee config.js. Se arma por nombre de columna.
+function rehacerPublicadas() {
+  const libro = SpreadsheetApp.openById(IDS_HOJA);
+  const cab = encabezados(libro.getSheetByName("Respuestas"));
+  const r = (t) => { const i = cab.indexOf(t); if (i < 0) throw new Error("Falta la columna " + t); const L = letra(i + 1); return "Respuestas!" + L + ":" + L; };
+  const comoTexto = (t) => "IF(ISNUMBER(" + r(t) + "),TEXT(" + r(t) + ',"yyyy-mm-dd"),' + r(t) + ")";
+  const columnas = [
+    ["nombre", r(N.nombre)], ["pais", r(N.pais)], ["nacionalidades", r(N.nacionalidades)], ["nivel", r(N.nivel)],
+    ["tipo_posgrado", r(N.posgrado)], ["area", r(N.area)], ["subarea", r(N.subarea)], ["edad_min", r(N.edadMin)],
+    ["edad_max", r(N.edadMax)], ["cobertura", r(N.cobertura)], ["duracion", r(N.duracion)], ["importe_segun", r(N.importe)],
+    ["plazas", r(N.plazas)], ["idioma", r(N.idioma)], ["modalidad", r(N.modalidad)], ["tipo_cierre", r(N.tipo)],
+    // "cierre" = datos viejos (fecha, mes o texto) para becas sin fechas límite nuevas
+    ["cierre", "IF(" + r(N.fechaVieja) + '<>"",' + comoTexto(N.fechaVieja) + ",IF(" + r(N.mes) + '<>"",' + r(N.mes) + "," + r(N.variasVieja) + "))"],
+    ["plazos", r("plazos")], ["enlace", r(N.enlace)], ["verificado", comoTexto(N.verificado)],
+    ["aprobada", "IF(" + r("aprobada") + '=TRUE,"sí","")'], ["id", r("id_beca")],
+  ];
+  const nombres = "{" + columnas.map((c) => '"' + c[0] + '"').join(",") + "}";
+  const vacios = "{" + columnas.map(() => '""').join(",") + "}";
+  const formula = "=" + "{" + nombres.slice(1, -1) + ";IFERROR(ARRAYFORMULA(FILTER({" + columnas.map((c) => c[1]).join(",") + "}," +
+    r("aprobada") + "=TRUE," + r(N.nombre) + '<>"")),' + vacios + ")}";
+  const pub = libro.getSheetByName("Publicadas");
+  pub.getRange("A1").setFormula(formula);
+}
