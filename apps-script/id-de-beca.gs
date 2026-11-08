@@ -784,6 +784,10 @@ function activarArchivar(desdeActualizar) {
   const items = reintentar(() => form.getItems());
   const buscar = (titulo, tipo) => items.find((i) => i.getTitle() === titulo && (!tipo || i.getType() === tipo)) || null;
   const mover = (it, a) => reintentar(() => { if (it.getIndex() !== a) form.moveItem(it.getIndex(), a); });
+  // Lo que se acaba de crear ya es PageBreakItem/MultipleChoiceItem/TextItem; lo que se encontró es un Item genérico
+  const comoPB = (x) => x.asPageBreakItem ? x.asPageBreakItem() : x;
+  const comoMC = (x) => x.asMultipleChoiceItem ? x.asMultipleChoiceItem() : x;
+  const comoTX = (x) => x.asTextItem ? x.asTextItem() : x;
   const ultimo = () => reintentar(() => form.getItems().length) - 1;
 
   // 1. Sección final: solo el código de la beca
@@ -795,7 +799,7 @@ function activarArchivar(desdeActualizar) {
   mover(pbArch, ultimo());
   mover(codigo, ultimo());
   // Quien llega al final de las fechas límite envía: nunca cae en esta sección por accidente
-  pbArch.asPageBreakItem().setGoToPage(FormApp.PageNavigationType.SUBMIT);
+  comoPB(pbArch).setGoToPage(FormApp.PageNavigationType.SUBMIT);
 
   // 2. Primera sección: "¿Qué quieres hacer?" y después el salto a "Datos de la beca"
   let pbDatos = buscar(SECCION_DATOS, T_.PAGE_BREAK);
@@ -804,16 +808,16 @@ function activarArchivar(desdeActualizar) {
   if (!accion) accion = form.addMultipleChoiceItem().setTitle(TITULO_ACCION).setRequired(true);
   mover(accion, 0);
   mover(pbDatos, 1);
-  const mc = accion.asMultipleChoiceItem();
+  const mc = comoMC(accion);
   mc.setChoices([
-    mc.createChoice(ACCION_REGISTRAR, pbDatos.asPageBreakItem()),
-    mc.createChoice(ACCION_ARCHIVAR, pbArch.asPageBreakItem()),
-    mc.createChoice(ACCION_PUBLICAR, pbArch.asPageBreakItem()),
+    mc.createChoice(ACCION_REGISTRAR, comoPB(pbDatos)),
+    mc.createChoice(ACCION_ARCHIVAR, comoPB(pbArch)),
+    mc.createChoice(ACCION_PUBLICAR, comoPB(pbArch)),
   ]);
 
   // 3. "ID de beca a corregir" acepta cualquier código (no solo BPH-0000)
   const corr = buscar(TITULO_CORREGIR, T_.TEXT);
-  if (corr) corr.asTextItem().clearValidation().setHelpText("Déjalo VACÍO si es una beca nueva. Para corregir una beca, escribe su código " +
+  if (corr) comoTX(corr).clearValidation().setHelpText("Déjalo VACÍO si es una beca nueva. Para corregir una beca, escribe su código " +
     "(aparece al pie de la ficha en el buscador, por ejemplo BPH-0007 o B1AMCA001) y llena todo de nuevo: la beca se reemplaza con estos datos.");
 
   if (desdeActualizar === true) return;
