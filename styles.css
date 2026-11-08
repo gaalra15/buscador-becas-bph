@@ -66,8 +66,9 @@ details.nota[open] summary::after { content: "−"; }
 .nota p { margin: 0; }
 .nota strong { color: var(--ink); }
 /* Pestañas: Buscar becas / Resumen de las becas */
-.pestanas { display: flex; gap: 4px; border-bottom: 2px solid var(--line); overflow-x: auto; }
+.pestanas { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 2px solid var(--line); } /* sin barra de desplazamiento: si no caben, bajan de línea */
 .pestanas button { font: inherit; font-weight: 700; font-size: .95rem; background: none; border: 0; border-bottom: 3px solid transparent; margin-bottom: -2px; padding: 10px 14px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+@media (max-width: 360px) { .pestanas button { padding: 10px 8px; font-size: .88rem; } }
 .pestanas button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .pestanas button:hover { color: var(--ink); }
 .panel { display: grid; gap: 18px; min-width: 0; }
