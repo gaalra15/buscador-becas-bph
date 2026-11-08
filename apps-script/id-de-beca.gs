@@ -217,6 +217,18 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
     "\nCambio enviado por: " + correo);
 }
 
+// Las fechas de la hoja son medianoche en la zona horaria de la HOJA. Si se leen con la zona del script
+// (que puede ser otra), salen un día antes. Por eso todo se formatea con la zona de la hoja.
+let zonaHojaGuardada = "";
+function zonaHoja() {
+  if (!zonaHojaGuardada) zonaHojaGuardada = SpreadsheetApp.openById(IDS_HOJA).getSpreadsheetTimeZone();
+  return zonaHojaGuardada;
+}
+// Fecha de la hoja -> mismo día calendario en la zona del script (lo que esperan las respuestas del formulario).
+function mismoDia(fecha, zona) {
+  const [a, m, d] = Utilities.formatDate(fecha, zona, "yyyy-MM-dd").split("-").map(Number);
+  return new Date(a, m - 1, d, 12); // mediodía: lejos de cualquier cambio de hora
+}
 function encabezados(hoja) { return hoja.getRange(1, 1, 1, hoja.getLastColumn()).getValues()[0].map(String); }
 function mayorId(valores) {
   let m = 0;
@@ -231,7 +243,7 @@ function avisar(correo, asunto, texto) {
 }
 // Lista "Pregunta: respuesta" de todo lo que se envió (sin marca temporal, correo ni columnas propias de la hoja).
 function resumen(cab, fila, iCorr, iCorreo) {
-  const zona = Session.getScriptTimeZone();
+  const zona = zonaHoja();
   return cab.map((h, i) => {
     if (i === 0 || i === iCorr || i === iCorreo || COLUMNAS_PROPIAS.includes(h) || SOLO_FORMULARIO.includes(h)) return null;
     let v = fila[i];
@@ -562,7 +574,7 @@ function prepararHoja() {
 
 // Junta las columnas de fechas límite de una fila en un texto JSON para el buscador.
 function plazosDeFila(cab, fila) {
-  const zona = Session.getScriptTimeZone();
+  const zona = zonaHoja();
   const v = (t) => { const i = cab.indexOf(t); return i < 0 ? "" : fila[i]; };
   const dia = (x) => x instanceof Date ? Utilities.formatDate(x, zona, "yyyy-MM-dd") : String(x || "").trim();
   const hora = (x) => x instanceof Date ? Utilities.formatDate(x, zona, "HH:mm") : String(x || "").trim();
@@ -640,7 +652,7 @@ const URL_PAGINA_CORREGIR = ""; // p. ej. "https://script.google.com/macros/s/AK
 function enlaceParaCorregir(cab, fila, form) {
   form = form || FormApp.openById(IDS_FORMULARIO);
   const T_ = FormApp.ItemType;
-  const zona = Session.getScriptTimeZone();
+  const zona = zonaHoja();
   const respuesta = form.createResponse();
   const faltan = [];
   const id = String(fila[cab.indexOf("id_beca")] || "").trim();
@@ -672,7 +684,7 @@ function enlaceParaCorregir(cab, fila, form) {
         const it = item.asCheckboxItem();
         r = it.createResponse(separarOpciones(String(v), it.getChoices().map((c) => c.getValue())));
       }
-      else if (tipo === T_.DATE) r = item.asDateItem().createResponse(v instanceof Date ? v : new Date(v));
+      else if (tipo === T_.DATE) r = item.asDateItem().createResponse(v instanceof Date ? mismoDia(v, zona) : new Date(v));
       else if (tipo === T_.TIME) {
         const d = v instanceof Date ? v : null;
         const m = d ? null : String(v).match(/(\d{1,2}):(\d{2})/);
