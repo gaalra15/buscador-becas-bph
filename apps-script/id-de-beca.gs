@@ -25,6 +25,8 @@ const TITULO_CORREGIR = "ID de beca a corregir";
 const CORREOS_QUE_PUBLICAN = ["becasparahn@gmail.com", "raudalesg99@gmail.com"];
 // Quién recibe copia de cada corrección. Durante las pruebas solo Mariaj; al entregar, cambiar a ["becasparahn@gmail.com"].
 const CORREOS_COPIA_CORRECCIONES = ["raudalesg99@gmail.com"];
+// Quién recibe el aviso cuando otra persona (no BpH) registra una beca que queda pendiente de revisión.
+const CORREOS_AVISO_PENDIENTES = ["becasparahn@gmail.com"];
 const COLUMNAS_PROPIAS = ["aprobada", "estado", "id_beca", "plazos", "archivada"]; // columnas de la hoja que no vienen del formulario
 
 // Archivar o publicar desde el formulario (8 de noviembre): ver "activarArchivar" más abajo.
@@ -151,6 +153,7 @@ function alEnviar(e) {
       (autorizada
         ? "Revisa los datos y guarda este ID." + textoEnlaceCorregir(hoja, fila)
         : "Guarda este ID por si necesitas consultarlo."));
+    if (!autorizada) avisarPendiente(hoja, fila, nuevoId, correo, datos());
   } finally {
     lock.releaseLock();
   }
@@ -966,4 +969,23 @@ function aprenderOpciones(cab, fila) {
   } catch (e) {
     console.error("No se pudieron agregar las opciones nuevas: " + e); // nunca frena el registro de la beca
   }
+}
+
+
+// Aviso a BpH: otra persona registró una beca que queda "Pendiente de revisión" (no se ve en el buscador).
+function avisarPendiente(hoja, fila, codigo, quien, resumenDatos) {
+  let enlace = "";
+  try {
+    const cab = encabezados(hoja);
+    enlace = enlaceParaCorregir(cab, hoja.getRange(fila, 1, 1, cab.length).getValues()[0]).url;
+  } catch (e) {
+    console.error("No se pudo armar el enlace para revisar la beca pendiente: " + e);
+  }
+  avisar(CORREOS_AVISO_PENDIENTES.join(","), "Beca pendiente de revisión: " + codigo,
+    "Registrada por: " + (quien || "(sin correo)") + "\nCódigo: " + codigo + "\n" +
+    "Todavía no aparece en el buscador. Para aprobarla, elige una opción:\n\n" +
+    "1. Revisarla y publicarla (recomendado): abre este enlace, que ya trae todos los datos. Revisa, corrige lo que haga falta y envía. " +
+    "Al enviarla desde la cuenta de BpH queda publicada.\n" + (enlace || "(no se pudo armar el enlace: usa \"Corregir una beca\" en el formulario con el código " + codigo + ")") + "\n\n" +
+    "2. Publicarla tal cual: en el formulario elige \"" + ACCION_PUBLICAR + "\" y escribe el código " + codigo + ".\n\n" +
+    "Antes de aprobarla, busca su nombre en el buscador para no publicar un duplicado.\n\nLo que registró:\n" + resumenDatos);
 }
