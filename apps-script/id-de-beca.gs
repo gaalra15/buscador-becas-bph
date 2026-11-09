@@ -3,7 +3,9 @@
  *
  * Qué hace:
  *   - Cada beca nueva que llega por el formulario recibe un ID (BPH-0463, BPH-0464, …) en la columna "id_beca".
- *   - A quien la envió le llega un correo con ese ID.
+ *   - Cada envío queda anotado en la "Bitácora del buscador de becas" (un Google Docs de solo lectura para Jenny),
+ *     con los datos, el código y el enlace para corregir. Ya no se mandan correos de confirmación.
+ *   - El ÚNICO correo que se envía es cuando otra persona (no BpH) registra una beca: les llega a CORREOS_AVISO_PENDIENTES.
  *   - Si alguien se equivocó, vuelve a llenar el formulario y pone el ID en la pregunta "ID de beca a corregir":
  *     la fila de ese ID se SOBREESCRIBE con los datos nuevos y la respuesta repetida se borra.
  *   - Lo que envía un correo de CORREOS_QUE_PUBLICAN (Jenny) se marca "aprobada" y se publica solo.
@@ -14,7 +16,10 @@
  *
  * Cómo usarlo (una sola vez):
  *   script.google.com (cuenta raudalesg99@gmail.com) > Nuevo proyecto > pega este archivo > Guardar >
- *   elige la función "configurarIds" > Ejecutar > acepta los permisos (incluye enviar correos).
+ *   elige la función "configurarIds" > Ejecutar > acepta los permisos.
+ *
+ * Bitácora (9 de noviembre): pega este archivo completo, elige la función "crearBitacora" > Ejecutar >
+ *   acepta los permisos nuevos (Google Docs y Drive). En "Registro de ejecución" aparece el enlace del documento.
  */
 const IDS_FORMULARIO = "1Eh02U-z-BddnM5JcXh4vhYgvagMu1H1c1AS2bWNwfm4";
 const IDS_HOJA = "1rzRIiZHC14KqA4zYR-TMpgCVQ5k6dEJOI2XWYQsE8Qw";
@@ -23,10 +28,14 @@ const TITULO_CORREGIR = "ID de beca a corregir";
 // Correos que publican solos y pueden corregir por ID (en minúsculas).
 // raudalesg99@gmail.com está solo para las pruebas: quitarlo cuando se le entregue a Jenny.
 const CORREOS_QUE_PUBLICAN = ["becasparahn@gmail.com", "raudalesg99@gmail.com"];
-// Quién recibe copia de cada corrección. Durante las pruebas solo Mariaj; al entregar, cambiar a ["becasparahn@gmail.com"].
-const CORREOS_COPIA_CORRECCIONES = ["raudalesg99@gmail.com"];
 // Quién recibe el aviso cuando otra persona (no BpH) registra una beca que queda pendiente de revisión.
-const CORREOS_AVISO_PENDIENTES = ["becasparahn@gmail.com"];
+// Es el único correo que envía el script. raudalesg99@gmail.com está para las pruebas: quitarlo al entregar.
+const CORREOS_AVISO_PENDIENTES = ["becasparahn@gmail.com", "raudalesg99@gmail.com"];
+// Bitácora: Google Docs donde se anota cada envío del formulario (el más reciente arriba).
+const TITULO_BITACORA = "Bitácora del buscador de becas";
+const CARPETA_BITACORA = "1JvVsCO7F_mM18OsN3Gqceed4ysDh0-Yp"; // carpeta "Buscador de becas BpH" en Drive
+const LECTORES_BITACORA = ["becasparahn@gmail.com"]; // pueden ver la bitácora pero no editarla
+const LIMITE_BITACORA = 800000; // caracteres; al pasarlo, lo viejo se guarda en una copia y la bitácora sigue con el mismo enlace
 const COLUMNAS_PROPIAS = ["aprobada", "estado", "id_beca", "plazos", "archivada"]; // columnas de la hoja que no vienen del formulario
 
 // Archivar o publicar desde el formulario (8 de noviembre): ver "activarArchivar" más abajo.
@@ -63,11 +72,10 @@ function configurarIds() {
   // Si ya existe "¿Qué quieres hacer?", esa pregunta va primero y "ID de beca a corregir" en "Datos de la beca"
   if (form.getItems().some((i) => i.getTitle() === TITULO_ACCION)) activarArchivar(true);
 
-  // Pedir el correo verificado (iniciar sesión con Google) para mandar el ID y saber quién publica
+  // Pedir el correo verificado (iniciar sesión con Google) para saber quién publica
   try { form.setEmailCollectionType(FormApp.EmailCollectionType.VERIFIED); }
   catch (e) { form.setCollectEmail(true); }
-  form.setConfirmationMessage("¡Gracias! Te enviamos un correo con el ID de esta beca (BPH-…). Guárdalo: si te equivocaste, " +
-    "vuelve a llenar el formulario y escribe ese ID en la primera pregunta para corregirla.");
+  form.setConfirmationMessage("¡Gracias! Tu respuesta quedó registrada.");
 
   // Disparador: un solo "alEnviar" (quita los de versiones anteriores)
   ScriptApp.getProjectTriggers()
@@ -78,7 +86,7 @@ function configurarIds() {
   SpreadsheetApp.flush();
   Utilities.sleep(4000); // que aparezcan las columnas nuevas
   completarIdsFaltantes();
-  Logger.log("Listo: IDs automáticos, correo con el ID y correcciones por ID activados.");
+  Logger.log("Listo: IDs automáticos y correcciones por ID activados.");
 }
 
 // Se ejecuta sola con cada respuesta del formulario.
@@ -102,7 +110,7 @@ function alEnviar(e) {
     const accion = iAccion >= 0 ? String(nueva[iAccion] || "").trim() : "";
     const idPedido = iCorr >= 0 && accion !== ACCION_NUEVA ? String(nueva[iCorr] || "").trim().toUpperCase() : "";
     const datos = () => resumen(cab, nueva, iCorr, iCorreo);
-    const comoQueda = autorizada ? "Ya está publicada en el buscador." : "Quedó pendiente de revisión antes de publicarse.";
+    const comoQueda = "Ya está publicada en el buscador.";
 
     // Archivar o publicar: la respuesta no es una beca, solo cambia "aprobada" de la beca con ese código
     if (accion === ACCION_ARCHIVAR || accion === ACCION_PUBLICAR) {
@@ -126,8 +134,7 @@ function alEnviar(e) {
         aprenderOpciones(cab, nueva);
         hoja.deleteRow(fila);
         asegurarEstado(hoja);
-        const copias = [...new Set([correo.toLowerCase(), ...CORREOS_COPIA_CORRECCIONES])].filter(Boolean).join(",");
-        avisar(copias, "Beca corregida: " + idPedido,
+        anotar("Beca corregida", idPedido,
           "Se reemplazaron los datos de la beca " + idPedido + " (" + nombre + ").\nCorrección enviada por: " + correo + "\n" +
           "Ya está publicada con los datos nuevos.\n\nAsí quedó registrada:\n" + datos() +
           textoEnlaceCorregir(hoja, destino > fila ? destino - 1 : destino));
@@ -148,12 +155,13 @@ function alEnviar(e) {
     escribirPlazos(hoja, fila);
     aprenderOpciones(cab, nueva);
     asegurarEstado(hoja);
-    avisar(correo, "Beca registrada: " + nuevoId,
-      aviso + "ID: " + nuevoId + "\n" + comoQueda + "\n\nLo que registraste:\n" + datos() + "\n\n" +
-      (autorizada
-        ? "Revisa los datos y guarda este ID." + textoEnlaceCorregir(hoja, fila)
-        : "Guarda este ID por si necesitas consultarlo."));
-    if (!autorizada) avisarPendiente(hoja, fila, nuevoId, correo, datos());
+    if (autorizada) {
+      anotar("Beca registrada", nuevoId,
+        aviso + "Código: " + nuevoId + " (" + nombre + ")\nRegistrada por: " + correo + "\n" + comoQueda +
+        "\n\nAsí quedó registrada:\n" + datos() + textoEnlaceCorregir(hoja, fila));
+    } else {
+      avisarPendiente(hoja, fila, nuevoId, correo, datos(), aviso); // correo a BpH + anotación en la bitácora
+    }
   } finally {
     lock.releaseLock();
   }
@@ -201,16 +209,16 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
   hoja.deleteRow(fila);
   asegurarEstado(hoja);
   if (!autorizada) {
-    avisar(correo, "No se pudo " + verbo + " la beca " + codigo,
-      "Solo Becas para Hondureños puede archivar o publicar becas. No se cambió nada.");
+    anotar("No se pudo " + verbo, codigo,
+      "Pedido por: " + (correo || "(sin correo)") + "\nSolo Becas para Hondureños puede archivar o publicar becas. No se cambió nada.");
     return;
   }
   const filas = Math.max(hoja.getLastRow() - 1, 1);
   const ids = hoja.getRange(2, iId + 1, filas, 1).getValues().map((r) => String(r[0]).trim().toUpperCase());
   const i = codigo ? ids.indexOf(codigo) : -1;
   if (i < 0) {
-    avisar(correo, "No se pudo " + verbo + " la beca " + codigo,
-      "No encontramos el código " + codigo + ". Revisa que esté escrito igual que al pie de la ficha en el buscador. No se cambió nada.");
+    anotar("No se pudo " + verbo, codigo,
+      "Pedido por: " + correo + "\nNo encontramos el código " + codigo + ". Revisa que esté escrito igual que al pie de la ficha en el buscador. No se cambió nada.");
     return;
   }
   const destino = i + 2;
@@ -220,8 +228,7 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
     if (archivar) hoja.getRange(destino, iArch + 1).setValue(new Date());
     else hoja.getRange(destino, iArch + 1).clearContent();
   }
-  const copias = [...new Set([correo.toLowerCase(), ...CORREOS_COPIA_CORRECCIONES])].filter(Boolean).join(",");
-  avisar(copias, (archivar ? "Beca archivada: " : "Beca publicada: ") + codigo,
+  anotar(archivar ? "Beca archivada" : "Beca publicada", codigo,
     codigo + " (" + nombre + ")\n" +
     (archivar
       ? "Ya no aparece en el buscador. Sus datos se guardan: para mostrarla de nuevo, elige \"" + ACCION_PUBLICAR + "\" en el formulario."
@@ -795,8 +802,8 @@ function probarEnlace() {
  *     buscador, pero sus datos se quedan en la hoja (columna "archivada" con la fecha, estado "Archivada").
  *   - Publicar o volver a publicar una beca     -> solo pide el código. Sirve para una beca archivada y
  *     también para publicar una "Pendiente de revisión" sin abrir la hoja.
- * Solo los correos de CORREOS_QUE_PUBLICAN pueden archivar o publicar; a cualquier otra persona le llega
- * un correo diciendo que no se cambió nada.
+ * Solo los correos de CORREOS_QUE_PUBLICAN pueden archivar o publicar; si lo intenta otra persona no se cambia
+ * nada y queda anotado en la bitácora.
  *
  * También quita la regla que obligaba a escribir "BPH-0000" en "ID de beca a corregir", porque las becas
  * de las guías tienen códigos como B1AMCA001 o BMEUE+001 y no se podían corregir.
@@ -973,7 +980,7 @@ function aprenderOpciones(cab, fila) {
 
 
 // Aviso a BpH: otra persona registró una beca que queda "Pendiente de revisión" (no se ve en el buscador).
-function avisarPendiente(hoja, fila, codigo, quien, resumenDatos) {
+function avisarPendiente(hoja, fila, codigo, quien, resumenDatos, nota) {
   let enlace = "";
   try {
     const cab = encabezados(hoja);
@@ -981,11 +988,112 @@ function avisarPendiente(hoja, fila, codigo, quien, resumenDatos) {
   } catch (e) {
     console.error("No se pudo armar el enlace para revisar la beca pendiente: " + e);
   }
-  avisar(CORREOS_AVISO_PENDIENTES.join(","), "Beca pendiente de revisión: " + codigo,
+ const texto = (nota || "") +
     "Registrada por: " + (quien || "(sin correo)") + "\nCódigo: " + codigo + "\n" +
     "Todavía no aparece en el buscador. Para aprobarla, elige una opción:\n\n" +
     "1. Revisarla y publicarla (recomendado): abre este enlace, que ya trae todos los datos. Revisa, corrige lo que haga falta y envía. " +
     "Al enviarla desde la cuenta de BpH queda publicada.\n" + (enlace || "(no se pudo armar el enlace: usa \"Corregir una beca\" en el formulario con el código " + codigo + ")") + "\n\n" +
     "2. Publicarla tal cual: en el formulario elige \"" + ACCION_PUBLICAR + "\" y escribe el código " + codigo + ".\n\n" +
-    "Antes de aprobarla, busca su nombre en el buscador para no publicar un duplicado.\n\nLo que registró:\n" + resumenDatos);
+    "Antes de aprobarla, busca su nombre en el buscador para no publicar un duplicado.\n\nLo que registró:\n" + resumenDatos;
+  anotar("Beca pendiente de revisión", codigo, texto);
+  const url = urlBitacora();
+  avisar(CORREOS_AVISO_PENDIENTES.join(","), "Beca pendiente de revisión: " + codigo,
+    texto + (url ? "\n\nTodo lo que pasa en el formulario queda en la bitácora: " + url : ""));
+}
+
+// ---------- Bitácora (Google Docs de solo lectura) ----------
+
+// Ejecutar UNA vez a mano: crea la bitácora (o muestra su enlace si ya existe).
+function crearBitacora() {
+  const doc = bitacora();
+  console.log("Bitácora: " + doc.getUrl());
+  return doc.getUrl();
+}
+
+function urlBitacora() {
+  try { return bitacora().getUrl(); } catch (e) { return ""; }
+}
+
+// Abre la bitácora guardada en las propiedades del script; si no existe, la crea.
+function bitacora() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty("BITACORA_ID");
+  if (id) {
+    try { return DocumentApp.openById(id); } catch (e) { console.error("No se pudo abrir la bitácora, se crea otra: " + e); }
+  }
+  const doc = DocumentApp.create(TITULO_BITACORA);
+  const cuerpo = doc.getBody();
+  cuerpo.getChild(0).asParagraph().setText(TITULO_BITACORA).setHeading(DocumentApp.ParagraphHeading.TITLE);
+  cuerpo.appendParagraph("Cada envío del formulario queda anotado aquí, el más reciente arriba. " +
+    "Busca con Ctrl+F (en el celular: menú ⋮ > Buscar y reemplazar) por nombre o código de beca. Este documento es solo de lectura.")
+    .setHeading(DocumentApp.ParagraphHeading.NORMAL);
+  cuerpo.appendParagraph("").appendHorizontalRule();
+  doc.saveAndClose();
+  compartirBitacora(doc.getId(), true);
+  props.setProperty("BITACORA_ID", doc.getId());
+  return DocumentApp.openById(doc.getId());
+}
+
+function compartirBitacora(id, mover) {
+  const archivo = DriveApp.getFileById(id);
+  if (mover) {
+    try { archivo.moveTo(DriveApp.getFolderById(CARPETA_BITACORA)); } catch (e) { console.error("No se pudo mover la bitácora a la carpeta: " + e); }
+  }
+  LECTORES_BITACORA.forEach((c) => {
+    try { archivo.addViewer(c); } catch (e) { console.error("No se pudo compartir la bitácora con " + c + ": " + e); }
+  });
+}
+
+// Posición donde empiezan las anotaciones (justo después de la línea del encabezado).
+function inicioBitacora(cuerpo) {
+  for (let i = 0; i < cuerpo.getNumChildren(); i++) {
+    const el = cuerpo.getChild(i);
+    if (el.getType() === DocumentApp.ElementType.PARAGRAPH && el.asParagraph().findElement(DocumentApp.ElementType.HORIZONTAL_RULE)) return i + 1;
+  }
+  return cuerpo.getNumChildren();
+}
+
+// Anota un envío arriba de todo: título con fecha, el texto completo y los enlaces clicables.
+// Nunca frena el registro de la beca: si algo falla, solo queda en el registro de ejecución.
+function anotar(titulo, codigo, texto) {
+  try {
+    const doc = bitacora();
+    const cuerpo = doc.getBody();
+    if (cuerpo.getText().length > LIMITE_BITACORA) archivarBitacora(doc);
+    let pos = inicioBitacora(cuerpo);
+    const fecha = Utilities.formatDate(new Date(), zonaHoja(), "dd/MM/yyyy HH:mm");
+    cuerpo.insertParagraph(pos++, fecha + " · " + titulo + (codigo ? " · " + codigo : ""))
+      .setHeading(DocumentApp.ParagraphHeading.HEADING3);
+    String(texto).split("\n").forEach((linea) => {
+      const p = cuerpo.insertParagraph(pos++, linea).setHeading(DocumentApp.ParagraphHeading.NORMAL);
+      enlazar(p, linea);
+    });
+    cuerpo.insertParagraph(pos, "").setHeading(DocumentApp.ParagraphHeading.NORMAL).appendHorizontalRule();
+    doc.saveAndClose();
+  } catch (e) {
+    console.error("No se pudo anotar en la bitácora (" + titulo + " " + codigo + "): " + e);
+  }
+}
+
+// Convierte en enlace cada https://… que haya en el párrafo.
+function enlazar(parrafo, linea) {
+  const texto = parrafo.editAsText();
+  const re = /https?:\/\/\S+/g;
+  let m;
+  while ((m = re.exec(linea)) !== null) texto.setLinkUrl(m.index, m.index + m[0].length - 1, m[0]);
+}
+
+// La bitácora se llenó: guarda una copia con todo lo anterior y deja la original (mismo enlace) solo con el encabezado.
+function archivarBitacora(doc) {
+  const fecha = Utilities.formatDate(new Date(), zonaHoja(), "dd/MM/yyyy");
+  const copia = DriveApp.getFileById(doc.getId()).makeCopy(TITULO_BITACORA + " (anotaciones hasta el " + fecha + ")");
+  compartirBitacora(copia.getId(), true);
+  const cuerpo = doc.getBody();
+  const desde = inicioBitacora(cuerpo);
+  for (let i = cuerpo.getNumChildren() - 1; i >= desde; i--) {
+    const el = cuerpo.getChild(i);
+    try { el.removeFromParent(); } catch (e) { if (el.getType() === DocumentApp.ElementType.PARAGRAPH) el.asParagraph().clear(); }
+  }
+  const p = cuerpo.insertParagraph(desde, "Las anotaciones anteriores al " + fecha + " están en: " + copia.getUrl());
+  enlazar(p, p.getText());
 }
