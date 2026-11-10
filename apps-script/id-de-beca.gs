@@ -1023,7 +1023,9 @@ function bitacora() {
   }
   const doc = DocumentApp.create(TITULO_BITACORA);
   const cuerpo = doc.getBody();
-  cuerpo.getChild(0).asParagraph().setText(TITULO_BITACORA).setHeading(DocumentApp.ParagraphHeading.TITLE);
+  const tituloDoc = cuerpo.getChild(0).asParagraph(); // setText no devuelve nada, por eso va en dos líneas
+  tituloDoc.setText(TITULO_BITACORA);
+  tituloDoc.setHeading(DocumentApp.ParagraphHeading.TITLE);
   cuerpo.appendParagraph("Cada envío del formulario queda anotado aquí, el más reciente arriba. " +
     "Busca con Ctrl+F (en el celular: menú ⋮ > Buscar y reemplazar) por nombre o código de beca. Este documento es solo de lectura.")
     .setHeading(DocumentApp.ParagraphHeading.NORMAL);
