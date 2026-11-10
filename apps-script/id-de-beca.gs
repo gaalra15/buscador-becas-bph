@@ -53,6 +53,32 @@ const SECCION_DATOS = "Datos de la beca";
 const SECCION_ARCHIVAR = "Archivar o publicar una beca";
 const COL_ARCHIVADA = "archivada"; // fecha en que se archivó (vacía = no archivada)
 const SOLO_FORMULARIO = [TITULO_ACCION, TITULO_CODIGO]; // preguntas que no son datos de la beca
+// Corrección enviada por alguien que no es de BpH: queda en su propia fila, sin publicar, con este código
+// (por ejemplo "BPASAE001_1 (corrección pendiente)"). Al aprobarla reemplaza la beca original y conserva su código.
+const SUFIJO_PENDIENTE = " (corrección pendiente)";
+function codigoPendiente(id) { return String(id).trim().toUpperCase() + SUFIJO_PENDIENTE.toUpperCase(); }
+function codigoOriginal(id) {
+  const t = String(id).trim();
+  return t.toUpperCase().endsWith(SUFIJO_PENDIENTE.toUpperCase()) ? t.slice(0, t.length - SUFIJO_PENDIENTE.length).trim() : t;
+}
+function idsDe(hoja, iId) {
+  return hoja.getRange(2, iId + 1, Math.max(hoja.getLastRow() - 1, 1), 1).getValues().map((r) => String(r[0]).trim().toUpperCase());
+}
+// Copia los datos de la beca (no las columnas propias ni las del formulario) a la fila destino.
+function copiarDatos(hoja, cab, valores, destino, iCorr) {
+  cab.forEach((h, i) => {
+    if (COLUMNAS_PROPIAS.includes(h) || SOLO_FORMULARIO.includes(h) || i === iCorr) return;
+    hoja.getRange(destino, i + 1).setValue(valores[i]);
+  });
+}
+// Borra las correcciones pendientes de un código (de abajo hacia arriba). Devuelve cuántas borró.
+function borrarPendientes(hoja, iId, id) {
+  const pend = codigoPendiente(id);
+  const ids = idsDe(hoja, iId);
+  let n = 0;
+  for (let i = ids.length - 1; i >= 0; i--) if (ids[i] === pend) { hoja.deleteRow(i + 2); n++; }
+  return n;
+}
 
 function configurarIds() {
   const form = FormApp.openById(IDS_FORMULARIO);
@@ -123,23 +149,33 @@ function alEnviar(e) {
       const destino = ids.findIndex((v, i) => v === idPedido && i + 2 !== fila) + 2; // 1 si no se encontró
       if (destino >= 2) {
         // Sobrescribir la fila de ese ID con lo que vino del formulario (sin tocar aprobada/estado/id)
-        cab.forEach((h, i) => {
-          if (COLUMNAS_PROPIAS.includes(h) || SOLO_FORMULARIO.includes(h) || i === iCorr) return;
-          hoja.getRange(destino, i + 1).setValue(nueva[i]);
-        });
+        copiarDatos(hoja, cab, nueva, destino, iCorr);
         if (iCorr >= 0) hoja.getRange(destino, iCorr + 1).clearContent();
         if (iAprob >= 0) hoja.getRange(destino, iAprob + 1).setValue(true); // se publica sola
         if (c(COL_ARCHIVADA) >= 0) hoja.getRange(destino, c(COL_ARCHIVADA) + 1).clearContent(); // corregida = ya no archivada
         escribirPlazos(hoja, destino);
         aprenderOpciones(cab, nueva);
         hoja.deleteRow(fila);
+        const pendientes = borrarPendientes(hoja, iId, idPedido); // la corrección de otra persona ya quedó resuelta
         asegurarEstado(hoja);
         anotar("Beca corregida", idPedido,
-          "Se reemplazaron los datos de la beca " + idPedido + " (" + nombre + ").\nCorrección enviada por: " + correo + "\n" +
-          "Ya está publicada con los datos nuevos.\n\nAsí quedó registrada:\n" + datos() +
-          textoEnlaceCorregir(hoja, destino > fila ? destino - 1 : destino));
+          "Se reemplazaron los datos de la beca " + idPedido + " (" + nombre + "). Conserva su código.\nCorrección enviada por: " + correo + "\n" +
+          "Ya está publicada con los datos nuevos." +
+          (pendientes ? "\nSe quitó de la hoja la corrección pendiente que había enviado otra persona para esta beca." : "") +
+          "\n\nAsí quedó registrada:\n" + datos() +
+          textoEnlaceCorregir(hoja, idsDe(hoja, iId).indexOf(idPedido) + 2));
         return;
       }
+    }
+
+    // Corrección de alguien que no es de BpH: no se crea una beca nueva; queda pendiente ligada al código original
+    if (idPedido && !autorizada && idsDe(hoja, iId).some((v, i) => v === idPedido && i + 2 !== fila)) {
+      hoja.getRange(fila, iId + 1).setValue(codigoPendiente(idPedido));
+      if (iAprob >= 0) hoja.getRange(fila, iAprob + 1).setValue(false);
+      escribirPlazos(hoja, fila);
+      asegurarEstado(hoja);
+      avisarPendiente(hoja, fila, idPedido, correo, datos(), "", true);
+      return;
     }
 
     // Beca nueva (o corrección que no se pudo aplicar)
@@ -147,7 +183,7 @@ function alEnviar(e) {
     if (idPedido) {
       aviso = autorizada
         ? "No encontramos el ID " + idPedido + ", así que esta beca se guardó como nueva.\n\n"
-        : "Solo Becas para Hondureños puede corregir becas por ID, así que esta respuesta se guardó como beca nueva.\n\n";
+        : "No encontramos el código " + idPedido + ", así que esta respuesta se guardó como beca nueva.\n\n";
     }
     const nuevoId = siguienteId(hoja, iId);
     hoja.getRange(fila, iId + 1).setValue(nuevoId);
@@ -204,7 +240,7 @@ function asegurarEstado(hoja, forzar) {
 function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada) {
   const iId = cab.indexOf("id_beca"), iAprob = cab.indexOf("aprobada"), iArch = cab.indexOf(COL_ARCHIVADA);
   const iNombre = cab.indexOf(N.nombre), iCodigo = cab.indexOf(TITULO_CODIGO);
-  const codigo = iCodigo >= 0 ? String(nueva[iCodigo] || "").trim().toUpperCase() : "";
+  const codigo = iCodigo >= 0 ? codigoOriginal(String(nueva[iCodigo] || "")).toUpperCase() : "";
   const verbo = archivar ? "archivar" : "publicar";
   hoja.deleteRow(fila);
   asegurarEstado(hoja);
@@ -213,8 +249,25 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
       "Pedido por: " + (correo || "(sin correo)") + "\nSolo Becas para Hondureños puede archivar o publicar becas. No se cambió nada.");
     return;
   }
-  const filas = Math.max(hoja.getLastRow() - 1, 1);
-  const ids = hoja.getRange(2, iId + 1, filas, 1).getValues().map((r) => String(r[0]).trim().toUpperCase());
+  let ids = idsDe(hoja, iId);
+  // Publicar una beca con una corrección pendiente = aprobar esa corrección tal cual (la más reciente)
+  let corregidaPor = "";
+  const iPend = !archivar && codigo ? ids.lastIndexOf(codigoPendiente(codigo)) : -1;
+  if (iPend >= 0) {
+    const ancho = cab.length, iCorr = cab.indexOf(TITULO_CORREGIR), iCorreo = cab.findIndex((h) => /correo|email/i.test(h));
+    const pend = hoja.getRange(iPend + 2, 1, 1, ancho).getValues()[0];
+    corregidaPor = iCorreo >= 0 ? String(pend[iCorreo] || "") : "";
+    const iOrig = ids.indexOf(codigo);
+    if (iOrig >= 0) {
+      copiarDatos(hoja, cab, pend, iOrig + 2, iCorr);
+      if (iCorr >= 0) hoja.getRange(iOrig + 2, iCorr + 1).clearContent();
+      escribirPlazos(hoja, iOrig + 2);
+      borrarPendientes(hoja, iId, codigo);
+    } else {
+      hoja.getRange(iPend + 2, iId + 1).setValue(codigo); // la original ya no existe: la corrección pasa a ser la beca
+    }
+    ids = idsDe(hoja, iId);
+  }
   const i = codigo ? ids.indexOf(codigo) : -1;
   if (i < 0) {
     anotar("No se pudo " + verbo, codigo,
@@ -233,6 +286,7 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
     (archivar
       ? "Ya no aparece en el buscador. Sus datos se guardan: para mostrarla de nuevo, elige \"" + ACCION_PUBLICAR + "\" en el formulario."
       : "Ya aparece en el buscador.") +
+    (corregidaPor || iPend >= 0 ? "\nSe aprobó tal cual la corrección pendiente enviada por " + (corregidaPor || "otra persona") + "; la beca conserva su código." : "") +
     "\nCambio enviado por: " + correo);
 }
 
@@ -686,7 +740,7 @@ function enlaceParaCorregir(cab, fila, form) {
     const deUnica = Object.keys(U).find((k) => U[k] === titulo && k !== "seccion");
     if (titulo === TITULO_ACCION) v = ACCION_CORREGIR;
     else if (titulo === TITULO_CODIGO) return;
-    else if (titulo === TITULO_CORREGIR) v = id;
+    else if (titulo === TITULO_CORREGIR) v = codigoOriginal(id); // una corrección pendiente se aprueba sobre la beca original
     else if (deUnica && !valorDe(cab, fila, U.fecha) && valorDe(cab, fila, N.tipo) === TIPOS_CIERRE[0])
       v = valorDe(cab, fila, P(1)[deUnica]) || (deUnica === "fecha" ? valorDe(cab, fila, N.fechaVieja) : ""); // datos de antes del cambio
     else if (titulo === N.verificado) v = new Date(); // al corregir se está verificando de nuevo
@@ -980,7 +1034,7 @@ function aprenderOpciones(cab, fila) {
 
 
 // Aviso a BpH: otra persona registró una beca que queda "Pendiente de revisión" (no se ve en el buscador).
-function avisarPendiente(hoja, fila, codigo, quien, resumenDatos, nota) {
+function avisarPendiente(hoja, fila, codigo, quien, resumenDatos, nota, esCorreccion) {
   let enlace = "";
   try {
     const cab = encabezados(hoja);
@@ -988,16 +1042,25 @@ function avisarPendiente(hoja, fila, codigo, quien, resumenDatos, nota) {
   } catch (e) {
     console.error("No se pudo armar el enlace para revisar la beca pendiente: " + e);
   }
- const texto = (nota || "") +
-    "Registrada por: " + (quien || "(sin correo)") + "\nCódigo: " + codigo + "\n" +
-    "Todavía no aparece en el buscador. Para aprobarla, elige una opción:\n\n" +
-    "1. Revisarla y publicarla (recomendado): abre este enlace, que ya trae todos los datos. Revisa, corrige lo que haga falta y envía. " +
-    "Al enviarla desde la cuenta de BpH queda publicada.\n" + (enlace || "(no se pudo armar el enlace: usa \"Corregir una beca\" en el formulario con el código " + codigo + ")") + "\n\n" +
-    "2. Publicarla tal cual: en el formulario elige \"" + ACCION_PUBLICAR + "\" y escribe el código " + codigo + ".\n\n" +
-    "Antes de aprobarla, busca su nombre en el buscador para no publicar un duplicado.\n\nLo que registró:\n" + resumenDatos;
-  anotar("Beca pendiente de revisión", codigo, texto);
+  const sinEnlace = "(no se pudo armar el enlace: usa \"Corregir una beca\" en el formulario con el código " + codigo + ")";
+  const texto = esCorreccion
+    ? "Corrección propuesta por: " + (quien || "(sin correo)") + "\nBeca: " + codigo + "\n" +
+      "La beca publicada NO cambia hasta que apruebes la corrección. Al aprobarla, se reemplazan sus datos y conserva el código " + codigo + ".\n\n" +
+      "1. Revisarla y aprobarla (recomendado): abre este enlace, que ya trae los cambios propuestos. Revisa, ajusta lo que haga falta y envía " +
+      "desde la cuenta de BpH.\n" + (enlace || sinEnlace) + "\n\n" +
+      "2. Aprobarla tal cual: en el formulario elige \"" + ACCION_PUBLICAR + "\" y escribe el código " + codigo + ".\n\n" +
+      "3. Si no quieres esos cambios, no hagas nada: la beca sigue como está.\n\nLo que propuso:\n" + resumenDatos
+    : (nota || "") +
+      "Registrada por: " + (quien || "(sin correo)") + "\nCódigo: " + codigo + "\n" +
+      "Todavía no aparece en el buscador. Para aprobarla, elige una opción:\n\n" +
+      "1. Revisarla y publicarla (recomendado): abre este enlace, que ya trae todos los datos. Revisa, corrige lo que haga falta y envía. " +
+      "Al enviarla desde la cuenta de BpH queda publicada.\n" + (enlace || sinEnlace) + "\n\n" +
+      "2. Publicarla tal cual: en el formulario elige \"" + ACCION_PUBLICAR + "\" y escribe el código " + codigo + ".\n\n" +
+      "Antes de aprobarla, busca su nombre en el buscador para no publicar un duplicado.\n\nLo que registró:\n" + resumenDatos;
+  const asunto = (esCorreccion ? "Corrección pendiente de revisión" : "Beca pendiente de revisión");
+  anotar(asunto, codigo, texto);
   const url = urlBitacora();
-  avisar(CORREOS_AVISO_PENDIENTES.join(","), "Beca pendiente de revisión: " + codigo,
+  avisar(CORREOS_AVISO_PENDIENTES.join(","), asunto + ": " + codigo,
     texto + (url ? "\n\nTodo lo que pasa en el formulario queda en la bitácora: " + url : ""));
 }
 
