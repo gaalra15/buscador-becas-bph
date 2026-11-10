@@ -127,16 +127,12 @@ function alEnviar(e) {
     const nueva = hoja.getRange(fila, 1, 1, ancho).getValues()[0];
     const c = (titulo) => cab.indexOf(titulo); // índice 0-based o -1
     const iId = c("id_beca"), iAprob = c("aprobada"), iCorr = c(TITULO_CORREGIR);
-    const iNombre = c("Nombre de la beca");
     const iCorreo = cab.findIndex((h) => /correo|email/i.test(h));
-    const nombre = String(nueva[iNombre] || "");
     const correo = iCorreo >= 0 ? String(nueva[iCorreo] || "").trim() : "";
     const autorizada = CORREOS_QUE_PUBLICAN.includes(correo.toLowerCase());
     const iAccion = c(TITULO_ACCION);
     const accion = iAccion >= 0 ? String(nueva[iAccion] || "").trim() : "";
     const idPedido = iCorr >= 0 && accion !== ACCION_NUEVA ? String(nueva[iCorr] || "").trim().toUpperCase() : "";
-    const datos = () => resumen(cab, nueva, iCorr, iCorreo);
-    const comoQueda = "Ya está publicada en el buscador.";
 
     // Archivar o publicar: la respuesta no es una beca, solo cambia "aprobada" de la beca con ese código
     if (accion === ACCION_ARCHIVAR || accion === ACCION_PUBLICAR) {
@@ -145,9 +141,9 @@ function alEnviar(e) {
     }
 
     if (idPedido && autorizada) {
-      const ids = hoja.getRange(2, iId + 1, hoja.getLastRow() - 1, 1).getValues().map((r) => String(r[0]).trim().toUpperCase());
-      const destino = ids.findIndex((v, i) => v === idPedido && i + 2 !== fila) + 2; // 1 si no se encontró
+      const destino = idsDe(hoja, iId).findIndex((v, i) => v === idPedido && i + 2 !== fila) + 2; // 1 si no se encontró
       if (destino >= 2) {
+        const antes = hoja.getRange(destino, 1, 1, ancho).getValues()[0];
         // Sobrescribir la fila de ese ID con lo que vino del formulario (sin tocar aprobada/estado/id)
         copiarDatos(hoja, cab, nueva, destino, iCorr);
         if (iCorr >= 0) hoja.getRange(destino, iCorr + 1).clearContent();
@@ -158,33 +154,31 @@ function alEnviar(e) {
         hoja.deleteRow(fila);
         const pendientes = borrarPendientes(hoja, iId, idPedido); // la corrección de otra persona ya quedó resuelta
         asegurarEstado(hoja);
+        const filaFinal = idsDe(hoja, iId).indexOf(idPedido) + 2;
         anotar("Beca corregida", idPedido,
-          "Se reemplazaron los datos de la beca " + idPedido + " (" + nombre + "). Conserva su código.\nCorrección enviada por: " + correo + "\n" +
-          "Ya está publicada con los datos nuevos." +
-          (pendientes ? "\nSe quitó de la hoja la corrección pendiente que había enviado otra persona para esta beca." : "") +
-          "\n\nAsí quedó registrada:\n" + datos() +
-          textoEnlaceCorregir(hoja, idsDe(hoja, iId).indexOf(idPedido) + 2));
+          ficha(cab, nueva, idPedido) + "\nCorregida por: " + correo + "\n" +
+          textoCambios(cab, antes, nueva, "Cambios:") +
+          (pendientes ? "\nSe quitó la corrección pendiente que había enviado otra persona para esta beca." : "") +
+          lineaEnlaces(hoja, filaFinal));
         return;
       }
     }
 
     // Corrección de alguien que no es de BpH: no se crea una beca nueva; queda pendiente ligada al código original
-    if (idPedido && !autorizada && idsDe(hoja, iId).some((v, i) => v === idPedido && i + 2 !== fila)) {
+    const iOriginal = idPedido && !autorizada ? idsDe(hoja, iId).findIndex((v, i) => v === idPedido && i + 2 !== fila) : -1;
+    if (iOriginal >= 0) {
+      const original = hoja.getRange(iOriginal + 2, 1, 1, ancho).getValues()[0];
       hoja.getRange(fila, iId + 1).setValue(codigoPendiente(idPedido));
       if (iAprob >= 0) hoja.getRange(fila, iAprob + 1).setValue(false);
       escribirPlazos(hoja, fila);
       asegurarEstado(hoja);
-      avisarPendiente(hoja, fila, idPedido, correo, datos(), "", true);
+      avisarPendiente(hoja, fila, idPedido, correo, "", original);
       return;
     }
 
     // Beca nueva (o corrección que no se pudo aplicar)
     let aviso = "";
-    if (idPedido) {
-      aviso = autorizada
-        ? "No encontramos el ID " + idPedido + ", así que esta beca se guardó como nueva.\n\n"
-        : "No encontramos el código " + idPedido + ", así que esta respuesta se guardó como beca nueva.\n\n";
-    }
+    if (idPedido) aviso = "No encontramos el código " + idPedido + ", así que esta respuesta se guardó como beca nueva.\n";
     const nuevoId = siguienteId(hoja, iId);
     hoja.getRange(fila, iId + 1).setValue(nuevoId);
     if (iAprob >= 0) hoja.getRange(fila, iAprob + 1).setValue(autorizada); // solo se publica sola si la envía BpH
@@ -193,10 +187,10 @@ function alEnviar(e) {
     asegurarEstado(hoja);
     if (autorizada) {
       anotar("Beca registrada", nuevoId,
-        aviso + "Código: " + nuevoId + " (" + nombre + ")\nRegistrada por: " + correo + "\n" + comoQueda +
-        "\n\nAsí quedó registrada:\n" + datos() + textoEnlaceCorregir(hoja, fila));
+        aviso + ficha(cab, nueva, nuevoId) + "\nRegistrada por: " + correo + "\n" + detalleCorto(cab, nueva) +
+        "\nYa está publicada en el buscador." + lineaEnlaces(hoja, fila));
     } else {
-      avisarPendiente(hoja, fila, nuevoId, correo, datos(), aviso); // correo a BpH + anotación en la bitácora
+      avisarPendiente(hoja, fila, nuevoId, correo, aviso); // correo a BpH + anotación en la bitácora
     }
   } finally {
     lock.releaseLock();
@@ -251,7 +245,7 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
   }
   let ids = idsDe(hoja, iId);
   // Publicar una beca con una corrección pendiente = aprobar esa corrección tal cual (la más reciente)
-  let corregidaPor = "";
+  let corregidaPor = "", cambiosAprobados = "";
   const iPend = !archivar && codigo ? ids.lastIndexOf(codigoPendiente(codigo)) : -1;
   if (iPend >= 0) {
     const ancho = cab.length, iCorr = cab.indexOf(TITULO_CORREGIR), iCorreo = cab.findIndex((h) => /correo|email/i.test(h));
@@ -259,6 +253,7 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
     corregidaPor = iCorreo >= 0 ? String(pend[iCorreo] || "") : "";
     const iOrig = ids.indexOf(codigo);
     if (iOrig >= 0) {
+      cambiosAprobados = textoCambios(cab, hoja.getRange(iOrig + 2, 1, 1, ancho).getValues()[0], pend, "Cambios aprobados:");
       copiarDatos(hoja, cab, pend, iOrig + 2, iCorr);
       if (iCorr >= 0) hoja.getRange(iOrig + 2, iCorr + 1).clearContent();
       escribirPlazos(hoja, iOrig + 2);
@@ -282,11 +277,12 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
     else hoja.getRange(destino, iArch + 1).clearContent();
   }
   anotar(archivar ? "Beca archivada" : "Beca publicada", codigo,
-    codigo + " (" + nombre + ")\n" +
+    ficha(cab, hoja.getRange(destino, 1, 1, cab.length).getValues()[0], codigo) + "\n" +
     (archivar
       ? "Ya no aparece en el buscador. Sus datos se guardan: para mostrarla de nuevo, elige \"" + ACCION_PUBLICAR + "\" en el formulario."
       : "Ya aparece en el buscador.") +
-    (corregidaPor || iPend >= 0 ? "\nSe aprobó tal cual la corrección pendiente enviada por " + (corregidaPor || "otra persona") + "; la beca conserva su código." : "") +
+    (iPend >= 0 ? "\nSe aprobó tal cual la corrección propuesta por " + (corregidaPor || "otra persona") + "; la beca conserva su código." +
+      (cambiosAprobados ? "\n" + cambiosAprobados : "") : "") +
     "\nCambio enviado por: " + correo);
 }
 
@@ -312,20 +308,14 @@ function siguienteId(hoja, iId) { return formatoId(mayorId(hoja.getRange(2, iId 
 function formatoId(n) { return IDS_PREFIJO + String(n).padStart(4, "0"); }
 function avisar(correo, asunto, texto) {
   if (!correo || !/@/.test(correo)) return;
-  MailApp.sendEmail(correo, asunto + " · Buscador de becas BpH", texto + "\n\nBecas para Hondureños");
+  texto += "\n\nBecas para Hondureños";
+  const plano = texto.replace(/\[\[([^|\]]+)\|([^\]\s]+)\]\]/g, "$1 ($2)");
+  const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const html = esc(texto).replace(/\[\[([^|\]]+)\|([^\]\s]+)\]\]/g, (_, t, u) => '<a href="' + u.replace(/"/g, "&quot;") + '">' + t + "</a>")
+    .replace(/\n/g, "<br>");
+  MailApp.sendEmail(correo, asunto + " · Buscador de becas BpH", plano, { htmlBody: html });
 }
 // Lista "Pregunta: respuesta" de todo lo que se envió (sin marca temporal, correo ni columnas propias de la hoja).
-function resumen(cab, fila, iCorr, iCorreo) {
-  const zona = zonaHoja();
-  return cab.map((h, i) => {
-    if (i === 0 || i === iCorr || i === iCorreo || COLUMNAS_PROPIAS.includes(h) || SOLO_FORMULARIO.includes(h)) return null;
-    let v = fila[i];
-    if (v instanceof Date) v = Utilities.formatDate(v, zona, v.getFullYear() < 1901 ? "HH:mm" : "dd/MM/yyyy"); // 1899 = solo hora
-    v = String(v === null || v === undefined ? "" : v).trim();
-    if (!v && (/^Plazo \d|^¿Agregar/.test(h) || h === N.fechaVieja || h === N.variasVieja || Object.values(U).includes(h))) return null; // secciones que no se usaron
-    return "- " + h + ": " + (v || "(vacío)");
-  }).filter(Boolean).join("\n");
-}
 function letra(n) {
   let s = "";
   while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
@@ -792,20 +782,6 @@ function separarOpciones(texto, opciones) {
   return elegidas;
 }
 
-// Texto para los correos: enlace de la beca que se acaba de guardar.
-function textoEnlaceCorregir(hoja, filaNum) {
-  try {
-    const cab = encabezados(hoja);
-    const fila = hoja.getRange(filaNum, 1, 1, cab.length).getValues()[0];
-    const { url, faltan } = enlaceParaCorregir(cab, fila);
-    return "\n\nPara corregirla sin llenar todo de nuevo, abre este enlace (ya trae todos los datos), cambia lo que haga falta y envía:\n" +
-      url + (faltan.length ? "\nOjo: estos campos no se pudieron prellenar y hay que llenarlos: " + faltan.join(", ") : "") +
-      (urlPaginaCorregir() ? "\n\nPara corregir cualquier otra beca, busca su código aquí: " + urlPaginaCorregir() : "");
-  } catch (e) {
-    console.error("No se pudo armar el enlace para corregir: " + e);
-    return "";
-  }
-}
 
 // Página "Corregir beca" (app web).
 function doGet(e) {
@@ -1034,34 +1010,88 @@ function aprenderOpciones(cab, fila) {
 
 
 // Aviso a BpH: otra persona registró una beca que queda "Pendiente de revisión" (no se ve en el buscador).
-function avisarPendiente(hoja, fila, codigo, quien, resumenDatos, nota, esCorreccion) {
+// Aviso a BpH: otra persona registró una beca (o propuso cambios a una) que queda "Pendiente de revisión".
+// Si "original" trae la fila de la beca publicada, es una corrección: solo se muestran los cambios propuestos.
+function avisarPendiente(hoja, fila, codigo, quien, nota, original) {
+  const cab = encabezados(hoja);
+  const valores = hoja.getRange(fila, 1, 1, cab.length).getValues()[0];
   let enlace = "";
-  try {
-    const cab = encabezados(hoja);
-    enlace = enlaceParaCorregir(cab, hoja.getRange(fila, 1, 1, cab.length).getValues()[0]).url;
-  } catch (e) {
-    console.error("No se pudo armar el enlace para revisar la beca pendiente: " + e);
-  }
-  const sinEnlace = "(no se pudo armar el enlace: usa \"Corregir una beca\" en el formulario con el código " + codigo + ")";
+  try { enlace = enlaceParaCorregir(cab, valores).url; }
+  catch (e) { console.error("No se pudo armar el enlace para revisar la beca pendiente: " + e); }
+  const revisar = (txt) => enlace ? link(txt, enlace) : "(usa \"Corregir una beca\" en el formulario con el código " + codigo + ")";
+  const esCorreccion = !!original;
   const texto = esCorreccion
-    ? "Corrección propuesta por: " + (quien || "(sin correo)") + "\nBeca: " + codigo + "\n" +
-      "La beca publicada NO cambia hasta que apruebes la corrección. Al aprobarla, se reemplazan sus datos y conserva el código " + codigo + ".\n\n" +
-      "1. Revisarla y aprobarla (recomendado): abre este enlace, que ya trae los cambios propuestos. Revisa, ajusta lo que haga falta y envía " +
-      "desde la cuenta de BpH.\n" + (enlace || sinEnlace) + "\n\n" +
-      "2. Aprobarla tal cual: en el formulario elige \"" + ACCION_PUBLICAR + "\" y escribe el código " + codigo + ".\n\n" +
-      "3. Si no quieres esos cambios, no hagas nada: la beca sigue como está.\n\nLo que propuso:\n" + resumenDatos
-    : (nota || "") +
-      "Registrada por: " + (quien || "(sin correo)") + "\nCódigo: " + codigo + "\n" +
-      "Todavía no aparece en el buscador. Para aprobarla, elige una opción:\n\n" +
-      "1. Revisarla y publicarla (recomendado): abre este enlace, que ya trae todos los datos. Revisa, corrige lo que haga falta y envía. " +
-      "Al enviarla desde la cuenta de BpH queda publicada.\n" + (enlace || sinEnlace) + "\n\n" +
-      "2. Publicarla tal cual: en el formulario elige \"" + ACCION_PUBLICAR + "\" y escribe el código " + codigo + ".\n\n" +
-      "Antes de aprobarla, busca su nombre en el buscador para no publicar un duplicado.\n\nLo que registró:\n" + resumenDatos;
-  const asunto = (esCorreccion ? "Corrección pendiente de revisión" : "Beca pendiente de revisión");
+    ? ficha(cab, original, codigo) + "\nCorrección propuesta por: " + (quien || "(sin correo)") + "\n" +
+      textoCambios(cab, original, valores, "Cambios propuestos:") + "\n" +
+      "La beca publicada no cambia hasta que la apruebes, y conserva su código.\n" +
+      "Para aprobarla: " + revisar("revisar y aprobar los cambios") +
+      ", o en el formulario elige \"" + ACCION_PUBLICAR + "\" con el código " + codigo + " para aprobarla tal cual.\n" +
+      "Si no quieres esos cambios, no hagas nada."
+    : (nota || "") + ficha(cab, valores, codigo) + "\nRegistrada por: " + (quien || "(sin correo)") + "\n" + detalleCorto(cab, valores) + "\n" +
+      "Todavía no aparece en el buscador. Antes de aprobarla, busca su nombre en el buscador para no publicar un duplicado.\n" +
+      "Para aprobarla: " + revisar("revisar y publicar") +
+      ", o en el formulario elige \"" + ACCION_PUBLICAR + "\" con el código " + codigo + " para publicarla tal cual.";
+  const asunto = esCorreccion ? "Corrección pendiente de revisión" : "Beca pendiente de revisión";
   anotar(asunto, codigo, texto);
   const url = urlBitacora();
   avisar(CORREOS_AVISO_PENDIENTES.join(","), asunto + ": " + codigo,
-    texto + (url ? "\n\nTodo lo que pasa en el formulario queda en la bitácora: " + url : ""));
+    texto + (url ? "\n\n" + link("Ver la bitácora", url) : ""));
+}
+
+// ---------- Textos cortos para la bitácora y el aviso ----------
+
+// Enlace con texto: en la bitácora y en el correo se ve solo el texto, clicable.
+function link(texto, url) { return url ? "[[" + texto + "|" + url + "]]" : texto; }
+
+// "BPASAE001_1 · Becas de pregrado en NYU Abu Dhabi (Emiratos Árabes Unidos)"
+function ficha(cab, fila, codigo) {
+  const v = (t) => String(valorDe(cab, fila, t) || "").trim();
+  const pais = v(N.pais) || v(N.paisViejo);
+  return codigo + " · " + (v(N.nombre) || "(sin nombre)") + (pais ? " (" + pais + ")" : "");
+}
+
+// "Nivel: Pregrado · Cobertura: Completa · Convocatoria" (enlace)
+function detalleCorto(cab, fila) {
+  const v = (t) => String(valorDe(cab, fila, t) || "").trim();
+  const partes = [];
+  if (v("Nivel")) partes.push("Nivel: " + v("Nivel"));
+  if (v("Cobertura")) partes.push("Cobertura: " + v("Cobertura"));
+  if (v(N.enlace)) partes.push(link("convocatoria", v(N.enlace)));
+  return partes.join(" · ");
+}
+
+// Texto de un valor para comparar y mostrar (fechas y horas como en la hoja).
+function textoValor(v, zona) {
+  if (v instanceof Date) return Utilities.formatDate(v, zona, v.getFullYear() < 1901 ? "HH:mm" : "dd/MM/yyyy");
+  return String(v === null || v === undefined ? "" : v).trim();
+}
+
+// Lista de lo que cambió entre dos versiones de la beca: "- Idioma: «Inglés» → «Inglés, Árabe»".
+function textoCambios(cab, antes, despues, titulo) {
+  const zona = zonaHoja();
+  const iCorr = cab.indexOf(TITULO_CORREGIR), iCorreo = cab.findIndex((h) => /correo|email/i.test(h));
+  const lineas = [];
+  cab.forEach((h, i) => {
+    if (!h || i === 0 || i === iCorr || i === iCorreo || h === N.verificado || COLUMNAS_PROPIAS.includes(h) || SOLO_FORMULARIO.includes(h)) return;
+    const a = textoValor(antes[i], zona), d = textoValor(despues[i], zona);
+    if (a === d) return;
+    if (!d && (/^Plazo \d|^¿Agregar/.test(h) || h === N.mes || h === N.fechaVieja || h === N.variasVieja || Object.values(U).includes(h))) return; // campos viejos que el formulario ya no llena
+    lineas.push("- " + h + ": «" + (a || "vacío") + "» → «" + (d || "vacío") + "»");
+  });
+  return lineas.length ? titulo + "\n" + lineas.join("\n") : "No cambió ningún dato (solo se marcó como verificada).";
+}
+
+// Enlace para volver a corregir la beca que está en esa fila.
+function lineaEnlaces(hoja, filaNum) {
+  try {
+    const cab = encabezados(hoja);
+    const fila = hoja.getRange(filaNum, 1, 1, cab.length).getValues()[0];
+    const { url, faltan } = enlaceParaCorregir(cab, fila);
+    return "\n" + link("Corregirla", url) + (faltan.length ? " (hay que volver a llenar: " + faltan.join(", ") + ")" : "");
+  } catch (e) {
+    console.error("No se pudo armar el enlace para corregir: " + e);
+    return "";
+  }
 }
 
 // ---------- Bitácora (Google Docs de solo lectura) ----------
@@ -1130,8 +1160,10 @@ function anotar(titulo, codigo, texto) {
     cuerpo.insertParagraph(pos++, fecha + " · " + titulo + (codigo ? " · " + codigo : ""))
       .setHeading(DocumentApp.ParagraphHeading.HEADING3);
     String(texto).split("\n").forEach((linea) => {
-      const p = cuerpo.insertParagraph(pos++, linea).setHeading(DocumentApp.ParagraphHeading.NORMAL);
-      enlazar(p, linea);
+      const { visible, enlaces } = partirEnlaces(linea);
+      const p = cuerpo.insertParagraph(pos++, visible).setHeading(DocumentApp.ParagraphHeading.NORMAL);
+      if (enlaces.length) enlaces.forEach((x) => p.editAsText().setLinkUrl(x.ini, x.fin, x.url));
+      else enlazar(p, visible);
     });
     cuerpo.insertParagraph(pos, "").setHeading(DocumentApp.ParagraphHeading.NORMAL).appendHorizontalRule();
     doc.saveAndClose();
@@ -1146,6 +1178,20 @@ function enlazar(parrafo, linea) {
   const re = /https?:\/\/\S+/g;
   let m;
   while ((m = re.exec(linea)) !== null) texto.setLinkUrl(m.index, m.index + m[0].length - 1, m[0]);
+}
+
+// Separa "[[texto|url]]" en el texto visible y la lista de enlaces (posición dentro de ese texto).
+function partirEnlaces(linea) {
+  const enlaces = [];
+  let visible = "", desde = 0, m;
+  const re = /\[\[([^|\]]+)\|([^\]\s]+)\]\]/g;
+  while ((m = re.exec(linea)) !== null) {
+    visible += linea.slice(desde, m.index);
+    enlaces.push({ ini: visible.length, fin: visible.length + m[1].length - 1, url: m[2] });
+    visible += m[1];
+    desde = m.index + m[0].length;
+  }
+  return { visible: visible + linea.slice(desde), enlaces };
 }
 
 // La bitácora se llenó: guarda una copia con todo lo anterior y deja la original (mismo enlace) solo con el encabezado.
