@@ -159,7 +159,7 @@ function alEnviar(e) {
           ficha(cab, nueva, idPedido) + "\nCorregida por: " + correo + "\n" +
           textoCambios(cab, antes, nueva, "Cambios:") +
           (pendientes ? "\nSe quitó la corrección pendiente que había enviado otra persona para esta beca." : "") +
-          lineaEnlaces(hoja, filaFinal));
+          lineaEnlaces(hoja, filaFinal), "corregida");
         return;
       }
     }
@@ -283,7 +283,7 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
       : "Ya aparece en el buscador.") +
     (iPend >= 0 ? "\nSe aprobó tal cual la corrección propuesta por " + (corregidaPor || "otra persona") + "; la beca conserva su código." +
       (cambiosAprobados ? "\n" + cambiosAprobados : "") : "") +
-    "\nCambio enviado por: " + correo);
+    "\nCambio enviado por: " + correo, archivar ? "" : "publicada");
 }
 
 // Las fechas de la hoja son medianoche en la zona horaria de la HOJA. Si se leen con la zona del script
@@ -1059,18 +1059,19 @@ function avisarPendiente(hoja, fila, codigo, quien, nota, original) {
   try { enlace = enlaceParaCorregir(cab, valores).url; }
   catch (e) { console.error("No se pudo armar el enlace para revisar la beca pendiente: " + e); }
   const revisar = (txt) => enlace ? link(txt, enlace) : "(usa \"Corregir una beca\" en el formulario con el código " + codigo + ")";
+  const publicar = enlacePublicar(codigo);
+  const talCual = (txt) => publicar ? link(txt, publicar)
+    : "en el formulario elige \"" + ACCION_PUBLICAR + "\" con el código " + codigo + " para " + txt;
   const esCorreccion = !!original;
   const texto = esCorreccion
     ? ficha(cab, original, codigo) + "\nCorrección propuesta por: " + (quien || "(sin correo)") + "\n" +
       textoCambios(cab, original, valores, "Cambios propuestos:") + "\n" +
       "La beca publicada no cambia hasta que la apruebes, y conserva su código.\n" +
-      "Para aprobarla: " + revisar("revisar y aprobar los cambios") +
-      ", o en el formulario elige \"" + ACCION_PUBLICAR + "\" con el código " + codigo + " para aprobarla tal cual.\n" +
+      "Para aprobarla: " + revisar("revisar y aprobar los cambios") + ", o " + talCual("aprobarla tal cual") + " (sin cambiar nada).\n" +
       "Si no quieres esos cambios, no hagas nada."
     : (nota || "") + ficha(cab, valores, codigo) + "\nRegistrada por: " + (quien || "(sin correo)") + "\n" + detalleCorto(cab, valores) + "\n" +
       "Todavía no aparece en el buscador. Antes de aprobarla, busca su nombre en el buscador para no publicar un duplicado.\n" +
-      "Para aprobarla: " + revisar("revisar y publicar") +
-      ", o en el formulario elige \"" + ACCION_PUBLICAR + "\" con el código " + codigo + " para publicarla tal cual.";
+      "Para aprobarla: " + revisar("revisar y publicar") + ", o " + talCual("publicarla tal cual") + " (sin cambiar nada).";
   const asunto = esCorreccion ? "Corrección pendiente de revisión" : "Beca pendiente de revisión";
   anotar(asunto, codigo, texto);
   const url = urlBitacora();
@@ -1134,6 +1135,24 @@ function lineaEnlaces(hoja, filaNum) {
   }
 }
 
+// Enlace prellenado: "Publicar o volver a publicar una beca" con el código ya puesto. "" si no se pudo.
+function enlacePublicar(codigo) {
+  try {
+    const form = FormApp.openById(IDS_FORMULARIO);
+    const r = form.createResponse();
+    let listo = 0;
+    form.getItems().forEach((item) => {
+      const t = item.getTitle();
+      if (t === TITULO_ACCION) { r.withItemResponse(item.asMultipleChoiceItem().createResponse(ACCION_PUBLICAR)); listo++; }
+      else if (t === TITULO_CODIGO) { r.withItemResponse(item.asTextItem().createResponse(codigoOriginal(codigo))); listo++; }
+    });
+    return listo === 2 ? r.toPrefilledUrl() : "";
+  } catch (e) {
+    console.error("No se pudo armar el enlace para publicar tal cual: " + e);
+    return "";
+  }
+}
+
 // ---------- Bitácora (Google Docs de solo lectura) ----------
 
 // Ejecutar UNA vez a mano: crea la bitácora (o muestra su enlace si ya existe).
@@ -1188,16 +1207,26 @@ function inicioBitacora(cuerpo) {
   return cuerpo.getNumChildren();
 }
 
+// Marcas de la bitácora: ❌ = pendiente (falta aprobarla), ✅ = resuelta, ⚠️ = no se pudo hacer.
+const MARCA_PENDIENTE = "❌", MARCA_LISTA = "✅", MARCA_ERROR = "⚠️";
+const TITULOS_PENDIENTES = ["Beca pendiente de revisión", "Corrección pendiente de revisión"];
+function marcaDe(titulo) {
+  if (TITULOS_PENDIENTES.indexOf(titulo) >= 0) return MARCA_PENDIENTE;
+  return /^No se pudo/.test(titulo) ? MARCA_ERROR : MARCA_LISTA;
+}
+
 // Anota un envío arriba de todo: título con fecha, el texto completo y los enlaces clicables.
+// Si "resuelve" viene ("publicada" o "corregida"), las entradas ❌ de ese código pasan a ✅ con la fecha.
 // Nunca frena el registro de la beca: si algo falla, solo queda en el registro de ejecución.
-function anotar(titulo, codigo, texto) {
+function anotar(titulo, codigo, texto, resuelve) {
   try {
     const doc = bitacora();
     const cuerpo = doc.getBody();
     if (cuerpo.getText().length > LIMITE_BITACORA) archivarBitacora(doc);
     let pos = inicioBitacora(cuerpo);
     const fecha = Utilities.formatDate(new Date(), zonaHoja(), "dd/MM/yyyy HH:mm");
-    cuerpo.insertParagraph(pos++, fecha + " · " + titulo + (codigo ? " · " + codigo : ""))
+    if (resuelve && codigo) marcarResueltas(cuerpo, codigo, resuelve + " el " + fecha);
+    cuerpo.insertParagraph(pos++, marcaDe(titulo) + " " + fecha + " · " + titulo + (codigo ? " · " + codigo : ""))
       .setHeading(DocumentApp.ParagraphHeading.HEADING3);
     String(texto).split("\n").forEach((linea) => {
       const { visible, enlaces } = partirEnlaces(linea);
@@ -1210,6 +1239,55 @@ function anotar(titulo, codigo, texto) {
   } catch (e) {
     console.error("No se pudo anotar en la bitácora (" + titulo + " " + codigo + "): " + e);
   }
+}
+
+// Partes de un título de la bitácora: "❌ 14/11/2026 16:39 · Corrección pendiente de revisión · BMEUDE003".
+function partesTitulo(texto) {
+  const m = String(texto).match(/^(❌|✅|⚠️)?\s*(\d\d\/\d\d\/\d{4} \d\d:\d\d) · ([^·]+?)(?: · ([^·]+?))?(?: · (.+))?$/);
+  return m ? { marca: m[1] || "", fecha: m[2], titulo: m[3].trim(), codigo: (m[4] || "").trim(), nota: m[5] || "" } : null;
+}
+
+// Pasa a ✅ las entradas ❌ (pendientes) de ese código y les agrega "· publicada el …" o "· corregida el …".
+function marcarResueltas(cuerpo, codigo, nota) {
+  const cod = codigoOriginal(codigo).toUpperCase();
+  const titulos = cuerpo.getParagraphs().filter((p) => p.getHeading() === DocumentApp.ParagraphHeading.HEADING3);
+  titulos.forEach((p) => {
+    const t = partesTitulo(p.getText());
+    if (!t || t.marca !== MARCA_PENDIENTE || codigoOriginal(t.codigo).toUpperCase() !== cod) return;
+    const texto = p.editAsText();
+    texto.deleteText(0, MARCA_PENDIENTE.length - 1);
+    texto.insertText(0, MARCA_LISTA);
+    texto.appendText(" · " + nota);
+  });
+}
+
+// Ejecutar UNA vez a mano: pone ❌/✅/⚠️ a las entradas que quedaron sin marca y pasa a ✅
+// las pendientes que ya se resolvieron después (publicada o corregida con el mismo código).
+function repararBitacora() {
+  const doc = bitacora();
+  const titulos = doc.getBody().getParagraphs().filter((p) => p.getHeading() === DocumentApp.ParagraphHeading.HEADING3);
+  const resueltas = {}; // código -> primera resolución posterior (la bitácora va de nueva a vieja)
+  let cambios = 0;
+  titulos.slice().reverse().forEach((p) => { // de la más vieja a la más nueva
+    const t = partesTitulo(p.getText());
+    if (!t) return;
+    if (!t.marca) { p.editAsText().insertText(0, marcaDe(t.titulo) + " "); t.marca = marcaDe(t.titulo); cambios++; }
+    const cod = codigoOriginal(t.codigo).toUpperCase();
+    if (t.titulo === "Beca publicada" || t.titulo === "Beca corregida") {
+      (resueltas[cod] = resueltas[cod] || []).forEach((q) => {
+        const texto = q.editAsText();
+        texto.deleteText(0, MARCA_PENDIENTE.length - 1);
+        texto.insertText(0, MARCA_LISTA);
+        texto.appendText(" · " + (t.titulo === "Beca publicada" ? "publicada" : "corregida") + " el " + t.fecha);
+        cambios++;
+      });
+      resueltas[cod] = [];
+    } else if (t.marca === MARCA_PENDIENTE && !t.nota) {
+      (resueltas[cod] = resueltas[cod] || []).push(p);
+    }
+  });
+  doc.saveAndClose();
+  Logger.log("Bitácora revisada: " + cambios + " cambios.");
 }
 
 // Convierte en enlace cada https://… que haya en el párrafo.
