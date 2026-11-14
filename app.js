@@ -203,7 +203,7 @@
     const vf = parseFecha(b.verificado);
     if (vf) pie.append(el("p", "verificado", "Verificada el " + fmt(vf)));
     if (/^https?:\/\//i.test(b.enlace)) {
-      const a = el("a", "ir", "Ver convocatoria oficial"); a.href = b.enlace; a.target = "_blank"; a.rel = "noopener";
+      const a = el("a", "ir", "Ver convocatoria"); a.href = b.enlace; a.target = "_blank"; a.rel = "noopener";
       pie.append(a);
     }
     if (b.id) pie.append(el("p", "codigo", "Código: " + b.id)); // para ubicar la beca en la hoja y corregirla por ID
