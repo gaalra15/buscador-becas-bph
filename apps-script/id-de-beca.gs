@@ -661,6 +661,46 @@ function escribirPlazos(hoja, fila) {
   const valores = hoja.getRange(fila, 1, 1, cab.length).getValues()[0];
   hoja.getRange(fila, iPl + 1).setValue(plazosDeFila(cab, valores));
 }
+// Columnas de la hoja que forman la columna "plazos" (la que lee el buscador).
+function columnasDeFechas() {
+  const t = [U.fecha, U.hora, U.zona, U.tipo, U.ingreso, U.estado];
+  for (let n = 1; n <= MAX_PLAZOS; n++) { const p = P(n); t.push(p.ronda, p.tipo, p.fecha, p.hora, p.zona, p.ingreso, p.estado); }
+  return t;
+}
+
+// Se ejecuta sola cuando alguien edita la hoja a mano. Si el cambio toca fechas límite en "Respuestas",
+// rehace "plazos" de esas filas para que el buscador muestre la fecha nueva (sin pasar por el formulario).
+function alEditarHoja(e) {
+  try {
+    const rango = e && e.range;
+    if (!rango || rango.getSheet().getName() !== "Respuestas") return;
+    const hoja = rango.getSheet();
+    const cab = encabezados(hoja);
+    const fechas = columnasDeFechas().map((t) => cab.indexOf(t) + 1).filter((c) => c > 0);
+    const c1 = rango.getColumn(), c2 = rango.getLastColumn();
+    if (!fechas.some((c) => c >= c1 && c <= c2)) return;
+    const iPl = cab.indexOf("plazos");
+    if (iPl < 0) return;
+    const f1 = Math.max(2, rango.getRow()), f2 = Math.min(rango.getLastRow(), hoja.getLastRow());
+    if (f2 < f1) return;
+    const datos = hoja.getRange(f1, 1, f2 - f1 + 1, cab.length).getValues();
+    hoja.getRange(f1, iPl + 1, datos.length, 1).setValues(datos.map((r) => [plazosDeFila(cab, r)]));
+  } catch (err) {
+    console.error("No se pudo actualizar plazos tras editar la hoja: " + err);
+  }
+}
+
+// Ejecutar UNA vez: activa la actualización automática de fechas al editar la hoja a mano.
+// Se puede volver a ejecutar: deja un solo disparador "alEditarHoja".
+function activarEdicionDeFechas() {
+  ScriptApp.getProjectTriggers()
+    .filter((t) => t.getHandlerFunction() === "alEditarHoja")
+    .forEach((t) => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger("alEditarHoja").forSpreadsheet(IDS_HOJA).onEdit().create();
+  recalcularPlazos(); // por si ya se cambiaron fechas a mano antes de activarlo
+  Logger.log("Listo: las fechas que se cambien en la hoja se verán en el buscador.");
+}
+
 function recalcularPlazos() {
   const hoja = SpreadsheetApp.openById(IDS_HOJA).getSheetByName("Respuestas");
   const cab = encabezados(hoja);
