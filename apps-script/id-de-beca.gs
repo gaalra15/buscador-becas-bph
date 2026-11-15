@@ -642,7 +642,11 @@ function plazosDeFila(cab, fila) {
   const dia = (x) => x instanceof Date ? Utilities.formatDate(x, zona, "yyyy-MM-dd") : String(x || "").trim();
   const hora = (x) => x instanceof Date ? Utilities.formatDate(x, zona, "HH:mm") : String(x || "").trim();
   const lista = [];
-  const fu = dia(v(U.fecha));
+  // Con "Varias rondas o fechas" y plazos 1–4 llenos, la fecha única se ignora para no repetir fechas.
+  let hayPlazos = false;
+  for (let n = 1; n <= MAX_PLAZOS; n++) if (dia(v(P(n).fecha))) hayPlazos = true;
+  const varias = String(v(N.tipo)).trim() === TIPOS_CIERRE[1] && hayPlazos;
+  const fu = varias ? "" : dia(v(U.fecha));
   if (fu) lista.push({ ronda: "", tipo: String(v(U.tipo)).trim(), fecha: fu, hora: hora(v(U.hora)),
     zona: String(v(U.zona)).trim(), ingreso: String(v(U.ingreso)).trim(), estado: String(v(U.estado)).trim() });
   for (let n = 1; n <= MAX_PLAZOS; n++) {
@@ -659,8 +663,23 @@ function escribirPlazos(hoja, fila) {
   const iPl = cab.indexOf("plazos");
   if (iPl < 0) return;
   const valores = hoja.getRange(fila, 1, 1, cab.length).getValues()[0];
+  limpiarFechaUnica(hoja, cab, fila, valores);
   hoja.getRange(fila, iPl + 1).setValue(plazosDeFila(cab, valores));
 }
+// Si la beca es de "Varias rondas o fechas" y tiene plazos 1–4, vacía las columnas de fecha única
+// (Fecha de cierre, Hora límite, Zona horaria, Tipo de plazo, Periodo de ingreso, Fecha confirmada o estimada).
+function limpiarFechaUnica(hoja, cab, fila, valores) {
+  const v = (t) => { const i = cab.indexOf(t); return i < 0 ? "" : valores[i]; };
+  if (String(v(N.tipo)).trim() !== TIPOS_CIERRE[1]) return;
+  let hayPlazos = false;
+  for (let n = 1; n <= MAX_PLAZOS; n++) if (String(v(P(n).fecha) || "").trim()) hayPlazos = true;
+  if (!hayPlazos) return; // si no hay plazos, la fecha única es la única que hay: no se borra
+  [U.fecha, U.hora, U.zona, U.tipo, U.ingreso, U.estado].forEach((t) => {
+    const i = cab.indexOf(t);
+    if (i >= 0 && String(valores[i] || "").trim()) { hoja.getRange(fila, i + 1).clearContent(); valores[i] = ""; }
+  });
+}
+
 // Columnas de la hoja que forman la columna "plazos" (la que lee el buscador).
 function columnasDeFechas() {
   const t = [U.fecha, U.hora, U.zona, U.tipo, U.ingreso, U.estado];
