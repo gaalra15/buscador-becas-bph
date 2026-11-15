@@ -1050,6 +1050,58 @@ function sincronizarOpciones() {
   Logger.log("Opciones del formulario actualizadas:\n" + informe.join("\n"));
 }
 
+/* =====================================================================================================
+ * ALINEAR FORMULARIO Y HOJA — ejecutar UNA vez, DESPUÉS de cambiar "Nivel" a "Casillas" en el editor del formulario.
+ *  1. En la hoja: "Pregrado y posgrado" pasa a "Pregrado, Posgrado"; en las columnas de varias opciones
+ *     se quitan repetidos y textos sueltos que no son opción (p. ej. "Arabe e ingles").
+ *  2. En el formulario: se quita la opción "Pregrado y posgrado" y se agregan todas las opciones que usa la hoja.
+ * ===================================================================================================== */
+const REEMPLAZOS_HOJA = { [N.nivel]: { "Pregrado y posgrado": "Pregrado, Posgrado" } };
+const QUITAR_OPCIONES = { [N.nivel]: ["Pregrado y posgrado"] };
+const BASURA_EN_CASILLAS = { [N.idioma]: ["Arabe e ingles"] };
+
+function alinearFormularioYHoja() {
+  const form = FormApp.openById(IDS_FORMULARIO);
+  const nivel = form.getItems().find((i) => i.getTitle() === N.nivel);
+  if (!nivel || nivel.getType() !== FormApp.ItemType.CHECKBOX) {
+    throw new Error("Primero cambia la pregunta \"Nivel\" a \"Casillas\" en el editor del formulario y vuelve a ejecutar.");
+  }
+  const hoja = SpreadsheetApp.openById(IDS_HOJA).getSheetByName("Respuestas");
+  const cab = encabezados(hoja);
+  const filas = Math.max(hoja.getLastRow() - 1, 1);
+  const casillas = form.getItems().filter((i) => i.getType() === FormApp.ItemType.CHECKBOX).map((i) => i.getTitle());
+  const informe = [];
+  casillas.forEach((titulo) => {
+    const col = cab.indexOf(titulo);
+    if (col < 0) return;
+    const rango = hoja.getRange(2, col + 1, filas, 1);
+    const datos = rango.getValues();
+    const rem = REEMPLAZOS_HOJA[titulo] || {}, basura = (BASURA_EN_CASILLAS[titulo] || []).map((x) => x.toLowerCase());
+    let cambios = 0;
+    datos.forEach((r) => {
+      const antes = String(r[0] || "").trim();
+      if (!antes) return;
+      const vistos = new Set();
+      const partes = antes.split(/,\s*/).map((x) => rem[x.trim()] || x.trim()).join(", ").split(/,\s*/)
+        .filter((x) => x && !basura.includes(x.toLowerCase()) && !vistos.has(x.toLowerCase()) && vistos.add(x.toLowerCase()));
+      const despues = partes.join(", ");
+      if (despues !== antes) { r[0] = despues; cambios++; }
+    });
+    if (cambios) { rango.setValues(datos); informe.push("- Hoja, " + titulo + ": " + cambios + " celdas ordenadas"); }
+  });
+  Object.keys(QUITAR_OPCIONES).forEach((titulo) => {
+    const it = form.getItems().find((i) => i.getTitle() === titulo && itemDeSeleccion(i));
+    if (!it) return;
+    const sel = itemDeSeleccion(it);
+    const quitar = QUITAR_OPCIONES[titulo];
+    const quedan = sel.x.getChoices().map((c) => c.getValue()).filter((v) => !quitar.includes(v));
+    sel.x.setChoiceValues(quedan);
+    informe.push("- Formulario, " + titulo + ": se quitó " + quitar.join(", "));
+  });
+  sincronizarOpciones(); // agrega al formulario cualquier opción que use la hoja
+  Logger.log("Listo:\n" + (informe.join("\n") || "- La hoja ya estaba ordenada") + "\n(Ver arriba el detalle de opciones del formulario.)");
+}
+
 // Después de cada envío: lo que se escribió en "Otro" queda como opción para la próxima vez.
 function aprenderOpciones(cab, fila) {
   try {
