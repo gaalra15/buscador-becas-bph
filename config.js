@@ -27,6 +27,7 @@ const COLUMNAS = {
   plazas: "plazas",
   plazos: "plazos",
   verificado: "verificado",
+  genero: "genero", // para quién es: vacío o "Todos" = cualquier persona
   id: "id", // código de la beca (BPH-0001, B1AMCA001…), se muestra al pie de cada ficha
 };
 

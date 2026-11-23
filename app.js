@@ -1,7 +1,7 @@
 // Buscador de becas: lee el CSV publicado, calcula si cada beca está abierta y aplica filtros que se guardan en la URL.
 (function () {
   const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
-  const FILTROS = ["nivel", "area", "pais", "cobertura", "idioma", "modalidad"];
+  const FILTROS = ["nivel", "area", "pais", "cobertura", "idioma", "modalidad", "genero"];
   const CAMPOS_LISTA = ["nivel", "area", "idioma", "modalidad"]; // celdas que pueden traer varios valores separados por ; o ,
 
   const $ = (sel) => document.querySelector(sel);
@@ -116,7 +116,9 @@
   // "Pregrado y posgrado" (tercera opción de Nivel) cuenta para los dos filtros.
   const SEPARADOR = { nivel: /[;,]|\s+y\s+/i };
   const mayuscula = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-  const valores = (beca, campo) => CAMPOS_LISTA.includes(campo) ? beca[campo].split(SEPARADOR[campo] || /[;,]/).map((s) => mayuscula(s.trim())).filter(Boolean) : [beca[campo]].filter(Boolean);
+  // Género: vacío o "Todos" = beca para cualquier persona (aparece con cualquier filtro de género).
+  const paraTodos = (b) => !b.genero || ["todos", "todas", "cualquiera", "todos los generos"].includes(norm(b.genero));
+  const valores = (beca, campo) => campo === "genero" ? (paraTodos(beca) ? [] : [mayuscula(beca.genero.trim())]) : CAMPOS_LISTA.includes(campo) ? beca[campo].split(SEPARADOR[campo] || /[;,]/).map((s) => mayuscula(s.trim())).filter(Boolean) : [beca[campo]].filter(Boolean);
 
   let becas = [];
   let pestana = "buscar";
@@ -151,6 +153,7 @@
       becas.forEach((b) => valores(b, f).forEach((v) => { if (!set.has(norm(v))) set.set(norm(v), v); }));
       const sel = $("#f-" + f);
       [...set.values()].sort((a, b) => a.localeCompare(b, "es")).forEach((v) => sel.add(new Option(v, v)));
+      if (f === "genero") sel.closest("label").hidden = sel.options.length < 2; // sin becas para un género en particular: no se muestra
     }
   }
 
@@ -166,6 +169,7 @@
     const tags = el("ul", "tags");
     [...lista(b.nivel), ...lista(b.tipoPosgrado), b.cobertura ? "Cobertura " + b.cobertura.toLowerCase() : "", ...lista(b.idioma), ...lista(b.modalidad)]
       .filter((t) => t && norm(t) !== "otro").forEach((t) => tags.append(el("li", null, t)));
+    if (!paraTodos(b)) tags.append(el("li", "genero", "Para: " + b.genero.trim().toLowerCase()));
     if (tags.children.length) cuerpo.append(tags);
     if (b.area) { const a = el("p", "area"); a.append(el("span", null, "Área: "), b.area.replace(/\s*;\s*/g, ", ")); cuerpo.append(a); }
 
@@ -218,7 +222,7 @@
     const sel = Object.fromEntries(FILTROS.map((f) => [f, norm($("#f-" + f).value)]));
     const res = becas.filter((b) => {
       if (soloAbiertas && !b.estado.abierta) return false;
-      for (const f of FILTROS) if (sel[f] && !valores(b, f).some((v) => norm(v) === sel[f])) return false;
+      for (const f of FILTROS) if (sel[f] && !(f === "genero" && paraTodos(b)) && !valores(b, f).some((v) => norm(v) === sel[f])) return false;
       if (q && !norm([b.id, b.nombre, b.pais, b.nacionalidades, b.nivel, b.tipoPosgrado, b.area, b.subarea, b.cobertura, b.idioma, b.modalidad].join(" ")).includes(q)) return false;
       return true;
     });
