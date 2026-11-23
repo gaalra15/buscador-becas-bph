@@ -25,7 +25,7 @@ Google Form → Google Sheets → pestaña "Publicadas" (CSV publicado) → esta
 
 ## Desplegar
 
-Cloudflare Pages conectado a este repositorio: sin comando de compilación, directorio de salida `/`. Cada push a `main` se publica solo.
+GitHub Pages (rama `main`, carpeta raíz): cada push a `main` se publica solo en gaalra15.github.io/buscador-becas-bph. El script de Google vive en `apps-script/id-de-beca.gs` y se pega a mano en Apps Script (ver `VERSION_SCRIPT`).
 
 ## Probar en local
 
