@@ -1150,6 +1150,10 @@ function agregarGenero() {
       .setHelpText("¿Para quién es la beca? Si es para cualquier persona, elige «Todos». Usa «Otro» si es, por ejemplo, para mujeres y personas no binarias.")
       .setChoiceValues(GENEROS).showOtherOption(true).setRequired(false);
   }
+  // Aclaración para no confundir la verificación con el cierre (caso IE University, 22 de noviembre)
+  const verif = form.getItems().find((i) => i.getTitle() === N.verificado);
+  if (verif) verif.setHelpText("NO es la fecha de cierre. Es el día en que revisaste la convocatoria (ya viene con la fecha de hoy: déjala así). " +
+    "La fecha de cierre va más adelante, en «" + U.fecha + "» o en los plazos.");
   const mod = form.getItems().find((i) => i.getTitle() === N.modalidad);
   if (mod && it.getIndex() !== mod.getIndex() + 1) form.moveItem(it.getIndex(), mod.getIndex() + (it.getIndex() > mod.getIndex() ? 1 : 0));
   // La columna aparece en la hoja cuando Google la crea; se espera un poco y se arma Publicadas.
