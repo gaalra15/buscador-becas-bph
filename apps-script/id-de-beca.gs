@@ -21,6 +21,9 @@
  * Bitácora (9 de noviembre): pega este archivo completo, elige la función "crearBitacora" > Ejecutar >
  *   acepta los permisos nuevos (Google Docs y Drive). En "Registro de ejecución" aparece el enlace del documento.
  */
+// Versión de este archivo: si la que corre en Apps Script no coincide con GitHub, ejecuta "verVersion".
+const VERSION_SCRIPT = "2026-11-23 (género y seguridad)";
+function verVersion() { Logger.log("Versión del script: " + VERSION_SCRIPT); }
 const IDS_FORMULARIO = "1Eh02U-z-BddnM5JcXh4vhYgvagMu1H1c1AS2bWNwfm4";
 const IDS_HOJA = "1rzRIiZHC14KqA4zYR-TMpgCVQ5k6dEJOI2XWYQsE8Qw";
 const IDS_PREFIJO = "BPH-";
@@ -64,12 +67,67 @@ function codigoOriginal(id) {
 function idsDe(hoja, iId) {
   return hoja.getRange(2, iId + 1, Math.max(hoja.getLastRow() - 1, 1), 1).getValues().map((r) => String(r[0]).trim().toUpperCase());
 }
+// Seguridad: un texto que empieza con = + - @ se guarda como texto (con apóstrofo delante), nunca como fórmula.
+// Así nadie puede colar una fórmula en una corrección (p. ej. para juntar los correos de la hoja y publicarlos).
+function seguro(v) { return typeof v === "string" && /^\s*[=+\-@]/.test(v) ? "'" + v : v; }
 // Copia los datos de la beca (no las columnas propias ni las del formulario) a la fila destino.
 function copiarDatos(hoja, cab, valores, destino, iCorr) {
   cab.forEach((h, i) => {
     if (COLUMNAS_PROPIAS.includes(h) || SOLO_FORMULARIO.includes(h) || i === iCorr) return;
-    hoja.getRange(destino, i + 1).setValue(valores[i]);
+    hoja.getRange(destino, i + 1).setValue(seguro(valores[i]));
   });
+}
+// Si en la fila recién enviada quedó alguna fórmula en las columnas del formulario, se convierte en texto.
+function neutralizarFormulas(hoja, fila, cab) {
+  const formulas = hoja.getRange(fila, 1, 1, cab.length).getFormulas()[0];
+  formulas.forEach((f, i) => {
+    if (f && !COLUMNAS_PROPIAS.includes(cab[i])) hoja.getRange(fila, i + 1).setValue("'" + f);
+  });
+}
+
+// Seguridad: busca la fila de ESTA respuesta por su marca temporal. El número de fila del disparador puede quedar
+// viejo si otro envío borró filas antes (por ejemplo, tres becas archivadas seguidas). Devuelve -1 si no la encuentra.
+function filaDeRespuesta(hoja, e) {
+  const esperada = e.range.getRow();
+  const marca = e.values && e.values[0] ? String(e.values[0]).trim() : "";
+  if (!marca) return esperada;
+  const ultima = hoja.getLastRow();
+  if (esperada <= ultima && hoja.getRange(esperada, 1).getDisplayValue().trim() === marca) return esperada;
+  if (ultima < 2) return -1;
+  const marcas = hoja.getRange(2, 1, ultima - 1, 1).getDisplayValues();
+  for (let i = marcas.length - 1; i >= 0; i--) if (marcas[i][0].trim() === marca) return i + 2;
+  const t = new Date(marca).getTime(); // por si la hoja muestra la fecha con otro formato
+  if (!isNaN(t)) {
+    const fechas = hoja.getRange(2, 1, ultima - 1, 1).getValues();
+    for (let i = fechas.length - 1; i >= 0; i--) if (fechas[i][0] instanceof Date && Math.abs(fechas[i][0].getTime() - t) < 1500) return i + 2;
+  }
+  return -1;
+}
+
+// Seguridad: solo se confía en el correo si el formulario pide iniciar sesión con Google (correo verificado).
+// Se revisa como mucho cada 10 minutos para no gastar cuota.
+function correoVerificado() {
+  const cache = CacheService.getScriptCache();
+  const guardado = cache.get("correoVerificado");
+  if (guardado) return guardado === "si";
+  let ok = false;
+  try { ok = FormApp.openById(IDS_FORMULARIO).getEmailCollectionType() === FormApp.EmailCollectionType.VERIFIED; }
+  catch (err) { console.error("No se pudo revisar cómo recoge correos el formulario: " + err); }
+  cache.put("correoVerificado", ok ? "si" : "no", 600);
+  return ok;
+}
+
+// Fecha de verificación en el futuro = casi seguro se escribió ahí la fecha de cierre. Se cambia a hoy y se avisa.
+function revisarVerificacion(hoja, fila, cab) {
+  const i = cab.indexOf(N.verificado);
+  if (i < 0) return "";
+  const v = hoja.getRange(fila, i + 1).getValue();
+  if (!(v instanceof Date)) return "";
+  const manana = new Date(); manana.setDate(manana.getDate() + 1);
+  if (v.getTime() <= manana.getTime()) return "";
+  hoja.getRange(fila, i + 1).setValue(new Date());
+  return "⚠️ La «" + N.verificado + "» venía en el futuro (" + textoValor(v, zonaHoja()) + "), así que se cambió a hoy. " +
+    "Si esa era la fecha de cierre, corrige la beca y ponla en «" + U.fecha + "» o en el plazo que corresponda.";
 }
 // Borra las correcciones pendientes de un código (de abajo hacia arriba). Devuelve cuántas borró.
 function borrarPendientes(hoja, iId, id) {
@@ -99,8 +157,7 @@ function configurarIds() {
   if (form.getItems().some((i) => i.getTitle() === TITULO_ACCION)) activarArchivar(true);
 
   // Pedir el correo verificado (iniciar sesión con Google) para saber quién publica
-  try { form.setEmailCollectionType(FormApp.EmailCollectionType.VERIFIED); }
-  catch (e) { form.setCollectEmail(true); }
+  form.setEmailCollectionType(FormApp.EmailCollectionType.VERIFIED); // si falla, que se vea el error: nunca correos sin verificar
   form.setConfirmationMessage("¡Gracias! Tu respuesta quedó registrada.");
 
   // Disparador: un solo "alEnviar" (quita los de versiones anteriores)
@@ -118,18 +175,45 @@ function configurarIds() {
 // Se ejecuta sola con cada respuesta del formulario.
 function alEnviar(e) {
   const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
+  lock.waitLock(120000); // espera hasta 2 minutos a que termine el envío anterior
   try {
+    procesarEnvio(e);
+  } catch (err) {
+    // Que el error no pase en silencio: queda en la bitácora con ⚠️ y Google avisa del fallo del disparador.
+    anotar("Error al procesar un envío", "", "Algo falló y este envío no se procesó completo.\nDetalle técnico: " + err +
+      "\nRevisa la hoja (la respuesta puede haber quedado sin código) o vuelve a enviarlo.");
+    throw err;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function procesarEnvio(e) {
+  {
     const hoja = e.range.getSheet();
-    const fila = e.range.getRow();
+    const fila = filaDeRespuesta(hoja, e);
+    if (fila < 2) {
+      anotar("No se pudo procesar un envío", "", "No encontramos en la hoja la respuesta enviada el " + (e.values ? e.values[0] : "") +
+        ". No se cambió nada. Si era tuya, vuelve a enviarla.");
+      return;
+    }
     const cab = encabezados(hoja);
+    neutralizarFormulas(hoja, fila, cab);
+    const avisoVerif = revisarVerificacion(hoja, fila, cab);
     const ancho = cab.length;
     const nueva = hoja.getRange(fila, 1, 1, ancho).getValues()[0];
     const c = (titulo) => cab.indexOf(titulo); // índice 0-based o -1
     const iId = c("id_beca"), iAprob = c("aprobada"), iCorr = c(TITULO_CORREGIR);
     const iCorreo = cab.findIndex((h) => /correo|email/i.test(h));
     const correo = iCorreo >= 0 ? String(nueva[iCorreo] || "").trim() : "";
-    const autorizada = CORREOS_QUE_PUBLICAN.includes(correo.toLowerCase());
+    // Solo publica sola si el correo es de BpH Y el formulario exige correo verificado (si no, cualquiera podría escribirlo).
+    const enLista = CORREOS_QUE_PUBLICAN.includes(correo.toLowerCase());
+    const autorizada = enLista && correoVerificado();
+    if (enLista && !autorizada) {
+      anotar("Formulario sin correo verificado", "", "⚠️ El formulario no está pidiendo iniciar sesión con Google, así que no se puede " +
+        "confirmar quién envía. Este envío quedó pendiente de revisión. Arréglalo en el formulario: Configuración > Respuestas > " +
+        "Recopilar direcciones de correo electrónico > Verificadas.");
+    }
     const iAccion = c(TITULO_ACCION);
     const accion = iAccion >= 0 ? String(nueva[iAccion] || "").trim() : "";
     const idPedido = iCorr >= 0 && accion !== ACCION_NUEVA ? String(nueva[iCorr] || "").trim().toUpperCase() : "";
@@ -158,6 +242,7 @@ function alEnviar(e) {
         anotar("Beca corregida", idPedido,
           ficha(cab, nueva, idPedido) + "\nCorregida por: " + correo + "\n" +
           textoCambios(cab, antes, nueva, "Cambios:") +
+          (avisoVerif ? "\n" + avisoVerif : "") +
           (pendientes ? "\nSe quitó la corrección pendiente que había enviado otra persona para esta beca." : "") +
           lineaEnlaces(hoja, filaFinal), "corregida");
         return;
@@ -188,12 +273,11 @@ function alEnviar(e) {
     if (autorizada) {
       anotar("Beca registrada", nuevoId,
         aviso + ficha(cab, nueva, nuevoId) + "\nRegistrada por: " + correo + "\n" + detalleCorto(cab, nueva) +
+        (avisoVerif ? "\n" + avisoVerif : "") +
         "\nYa está publicada en el buscador." + lineaEnlaces(hoja, fila));
     } else {
       avisarPendiente(hoja, fila, nuevoId, correo, aviso); // correo a BpH + anotación en la bitácora
     }
-  } finally {
-    lock.releaseLock();
   }
 }
 
@@ -239,7 +323,7 @@ function archivarOPublicar(hoja, fila, cab, nueva, archivar, correo, autorizada)
   hoja.deleteRow(fila);
   asegurarEstado(hoja);
   if (!autorizada) {
-    anotar("No se pudo " + verbo, codigo,
+    anotar("No se pudo " + verbo, limpio(codigo),
       "Pedido por: " + (correo || "(sin correo)") + "\nSolo Becas para Hondureños puede archivar o publicar becas. No se cambió nada.");
     return;
   }
@@ -309,9 +393,9 @@ function formatoId(n) { return IDS_PREFIJO + String(n).padStart(4, "0"); }
 function avisar(correo, asunto, texto) {
   if (!correo || !/@/.test(correo)) return;
   texto += "\n\nBecas para Hondureños";
-  const plano = texto.replace(/\[\[([^|\]]+)\|([^\]\s]+)\]\]/g, "$1 ($2)");
+  const plano = texto.replace(RE_ENLACE, "$1 ($2)");
   const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const html = esc(texto).replace(/\[\[([^|\]]+)\|([^\]\s]+)\]\]/g, (_, t, u) => '<a href="' + u.replace(/"/g, "&quot;") + '">' + t + "</a>")
+  const html = esc(texto).replace(RE_ENLACE, (_, t, u) => '<a href="' + u.replace(/"/g, "&quot;") + '">' + t + "</a>")
     .replace(/\n/g, "<br>");
   MailApp.sendEmail(correo, asunto + " · Buscador de becas BpH", plano, { htmlBody: html });
 }
@@ -347,8 +431,10 @@ const N = {
   edadMin: "Edad mínima", edadMax: "Edad máxima", cobertura: "Cobertura", duracion: "Duración de la financiación",
   importe: "El importe depende de", plazas: "Número de plazas", idioma: "Idioma", modalidad: "Modalidad",
   enlace: "Enlace oficial", verificado: "Fecha de última verificación", tipo: "Tipo de cierre", mes: "Mes de cierre",
-  fechaVieja: "Fecha de cierre", variasVieja: "Fechas de cierre",
+  fechaVieja: "Fecha de cierre", variasVieja: "Fechas de cierre", genero: "Género",
 };
+// Para quién es la beca (23 de noviembre). Vacío o "Todos" = cualquier persona. "Otro" permite escribir p. ej. "Mujeres y personas no binarias".
+const GENEROS = ["Todos", "Mujeres", "Hombres"];
 const P = (n) => ({
   seccion: "Fecha límite " + n,
   ronda: "Plazo " + n + ": nombre de la ronda",
@@ -567,7 +653,7 @@ function actualizarCampos() {
   // Orden final de la primera sección y luego las secciones
   const primero = [buscar(TITULO_CORREGIR), buscar(N.nombre), pais, nacionalidades, buscar(N.nivel), posgrado, buscar(N.area),
     buscar(N.subarea), edadMin, edadMax, buscar(N.cobertura), duracion, importe, plazas, buscar(N.idioma), buscar(N.modalidad),
-    buscar(N.enlace), verificado].filter(Boolean);
+    buscar(N.genero), buscar(N.enlace), verificado].filter(Boolean);
   const ids = new Set();
   const orden = [...primero];
   const resto = [tipo, pbMes, mes].concat(...secciones.map((s) => [s.pb, ...s.items]));
@@ -745,6 +831,7 @@ function rehacerPublicadas() {
     ["plazos", r("plazos")], ["enlace", r(N.enlace)], ["verificado", comoTexto(N.verificado)],
     ["aprobada", "IF(" + r("aprobada") + '=TRUE,"sí","")'], ["id", r("id_beca")],
   ];
+  if (cab.indexOf(N.genero) >= 0) columnas.push(["genero", r(N.genero)]); // existe después de ejecutar "agregarGenero"
   const nombres = "{" + columnas.map((c) => '"' + c[0] + '"').join(",") + "}";
   const vacios = "{" + columnas.map(() => '""').join(",") + "}";
   const formula = "=" + "{" + nombres.slice(1, -1) + ";IFERROR(ARRAYFORMULA(FILTER({" + columnas.map((c) => c[1]).join(",") + "}," +
@@ -870,8 +957,7 @@ function doGet(e) {
     '<h1>Corregir una beca</h1><form method="get" action="' + esc(ScriptApp.getService().getUrl()) + '" target="_top">' +
     '<input name="id" placeholder="Código" value="' + esc(id) + '" required> <button>Buscar</button></form>' + cuerpo +
     '</body></html>';
-  return HtmlService.createHtmlOutput(html).setTitle("Corregir beca · BpH")
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  return HtmlService.createHtmlOutput(html).setTitle("Corregir beca · BpH"); // sin ALLOWALL: otras páginas no la pueden incrustar
 }
 
 // Prueba rápida desde el editor: muestra en el registro el enlace de una beca.
@@ -984,7 +1070,7 @@ function activarArchivar(desdeActualizar) {
  * - Las listas desplegables no permiten "Otro" en Google Forms: solo se completan sus opciones.
  * Se puede volver a ejecutar cuando se quiera; no duplica opciones (no distingue mayúsculas).
  * ===================================================================================================== */
-const PREGUNTAS_CON_OTRO = [N.nivel, N.area, N.idioma, N.posgrado, N.importe, N.duracion];
+const PREGUNTAS_CON_OTRO = [N.nivel, N.area, N.idioma, N.posgrado, N.importe, N.duracion, N.genero];
 const PREGUNTAS_SINCRONIZADAS = PREGUNTAS_CON_OTRO.concat([N.pais, N.cobertura, N.modalidad, N.mes, U.tipo, U.ingreso])
   .concat([1, 2, 3, 4].map((n) => [P(n).tipo, P(n).ingreso]).flat());
 const RENOMBRAR_OPCIONES = { [N.posgrado]: { "Máster": "Maestría" } }; // nombre viejo en el formulario -> nombre de la hoja
@@ -1051,6 +1137,33 @@ function sincronizarOpciones() {
 }
 
 /* =====================================================================================================
+ * GÉNERO (23 de noviembre) — ejecutar UNA vez "agregarGenero".
+ *  Agrega al formulario la pregunta "Género" (Todos / Mujeres / Hombres / Otro) después de "Modalidad",
+ *  crea su columna en la hoja y la suma a Publicadas como "genero". Las becas que ya existen quedan vacías = para todos.
+ *  Se puede volver a ejecutar sin duplicar nada.
+ * ===================================================================================================== */
+function agregarGenero() {
+  const form = FormApp.openById(IDS_FORMULARIO);
+  let it = form.getItems().find((i) => i.getTitle() === N.genero);
+  if (!it) {
+    it = form.addMultipleChoiceItem().setTitle(N.genero)
+      .setHelpText("¿Para quién es la beca? Si es para cualquier persona, elige «Todos». Usa «Otro» si es, por ejemplo, para mujeres y personas no binarias.")
+      .setChoiceValues(GENEROS).showOtherOption(true).setRequired(false);
+  }
+  const mod = form.getItems().find((i) => i.getTitle() === N.modalidad);
+  if (mod && it.getIndex() !== mod.getIndex() + 1) form.moveItem(it.getIndex(), mod.getIndex() + (it.getIndex() > mod.getIndex() ? 1 : 0));
+  // La columna aparece en la hoja cuando Google la crea; se espera un poco y se arma Publicadas.
+  const hoja = SpreadsheetApp.openById(IDS_HOJA).getSheetByName("Respuestas");
+  for (let k = 0; k < 10 && encabezados(hoja).indexOf(N.genero) < 0; k++) { SpreadsheetApp.flush(); Utilities.sleep(3000); }
+  if (encabezados(hoja).indexOf(N.genero) < 0) {
+    Logger.log("La pregunta quedó en el formulario, pero la columna \"" + N.genero + "\" todavía no aparece en la hoja. Espera un minuto y vuelve a ejecutar agregarGenero.");
+    return;
+  }
+  rehacerPublicadas();
+  Logger.log("Listo: \"" + N.genero + "\" está en el formulario, en la hoja y en Publicadas (columna genero).");
+}
+
+/* =====================================================================================================
  * ALINEAR FORMULARIO Y HOJA — ejecutar UNA vez, DESPUÉS de cambiar "Nivel" a "Casillas" en el editor del formulario.
  *  1. En la hoja: "Pregrado y posgrado" pasa a "Pregrado, Posgrado"; en las columnas de varias opciones
  *     se quitan repetidos y textos sueltos que no son opción (p. ej. "Arabe e ingles").
@@ -1084,7 +1197,7 @@ function alinearFormularioYHoja() {
       const vistos = new Set();
       const partes = antes.split(/,\s*/).map((x) => rem[x.trim()] || x.trim()).join(", ").split(/,\s*/)
         .filter((x) => x && !basura.includes(x.toLowerCase()) && !vistos.has(x.toLowerCase()) && vistos.add(x.toLowerCase()));
-      const despues = partes.join(", ");
+      const despues = seguro(partes.join(", "));
       if (despues !== antes) { r[0] = despues; cambios++; }
     });
     if (cambios) { rango.setValues(datos); informe.push("- Hoja, " + titulo + ": " + cambios + " celdas ordenadas"); }
@@ -1145,26 +1258,48 @@ function avisarPendiente(hoja, fila, codigo, quien, nota, original) {
       "Para aprobarla: " + revisar("revisar y publicar") + ", o " + talCual("publicarla tal cual") + " (sin cambiar nada).";
   const asunto = esCorreccion ? "Corrección pendiente de revisión" : "Beca pendiente de revisión";
   anotar(asunto, codigo, texto);
+  if (!puedeAvisar(quien)) return; // mucho envío de la misma persona o sin cuota: queda solo en la bitácora
   const url = urlBitacora();
   avisar(CORREOS_AVISO_PENDIENTES.join(","), asunto + ": " + codigo,
     texto + (url ? "\n\n" + link("Ver la bitácora", url) : ""));
 }
 
+// Seguridad (spam): como mucho MAX_AVISOS_POR_PERSONA correos al día por quien envía, y nunca si queda poca cuota de Gmail.
+const MAX_AVISOS_POR_PERSONA = 5;
+function puedeAvisar(quien) {
+  try {
+    if (MailApp.getRemainingDailyQuota() < 10) return false;
+    const clave = "avisos_" + Utilities.formatDate(new Date(), zonaHoja(), "yyyyMMdd") + "_" + String(quien || "anonimo").toLowerCase();
+    const props = PropertiesService.getScriptProperties();
+    const n = Number(props.getProperty(clave) || 0) + 1;
+    props.setProperty(clave, String(n));
+    return n <= MAX_AVISOS_POR_PERSONA;
+  } catch (err) { console.error("No se pudo revisar el límite de avisos: " + err); return true; }
+}
+
 // ---------- Textos cortos para la bitácora y el aviso ----------
 
 // Enlace con texto: en la bitácora y en el correo se ve solo el texto, clicable.
-function link(texto, url) { return url ? "[[" + texto + "|" + url + "]]" : texto; }
+// Seguridad: el enlace se marca con caracteres invisibles que el script quita de todo lo que viene del formulario,
+// así nadie puede meter un "[[Aprobar aquí|sitio falso]]" en el nombre de una beca y que se vuelva un enlace real.
+const ENL_A = "\uE000", ENL_B = "\uE001", ENL_C = "\uE002";
+const RE_ENLACE = /\uE000([^\uE001]+)\uE001([^\uE002\s]+)\uE002/g;
+function limpio(t) { return String(t === null || t === undefined ? "" : t).replace(/[\uE000-\uE002]/g, ""); }
+function link(texto, url) {
+  url = limpio(url).trim();
+  return /^https?:\/\//i.test(url) ? ENL_A + limpio(texto) + ENL_B + url + ENL_C : limpio(texto);
+}
 
 // "BPASAE001_1 · Becas de pregrado en NYU Abu Dhabi (Emiratos Árabes Unidos)"
 function ficha(cab, fila, codigo) {
-  const v = (t) => String(valorDe(cab, fila, t) || "").trim();
+  const v = (t) => limpio(valorDe(cab, fila, t) || "").trim();
   const pais = v(N.pais) || v(N.paisViejo);
   return codigo + " · " + (v(N.nombre) || "(sin nombre)") + (pais ? " (" + pais + ")" : "");
 }
 
 // "Nivel: Pregrado · Cobertura: Completa · Convocatoria" (enlace)
 function detalleCorto(cab, fila) {
-  const v = (t) => String(valorDe(cab, fila, t) || "").trim();
+  const v = (t) => limpio(valorDe(cab, fila, t) || "").trim();
   const partes = [];
   if (v("Nivel")) partes.push("Nivel: " + v("Nivel"));
   if (v("Cobertura")) partes.push("Cobertura: " + v("Cobertura"));
@@ -1175,7 +1310,7 @@ function detalleCorto(cab, fila) {
 // Texto de un valor para comparar y mostrar (fechas y horas como en la hoja).
 function textoValor(v, zona) {
   if (v instanceof Date) return Utilities.formatDate(v, zona, v.getFullYear() < 1901 ? "HH:mm" : "dd/MM/yyyy");
-  return String(v === null || v === undefined ? "" : v).trim();
+  return limpio(v).trim();
 }
 
 // Lista de lo que cambió entre dos versiones de la beca: "- Idioma: «Inglés» → «Inglés, Árabe»".
@@ -1293,7 +1428,11 @@ function anotar(titulo, codigo, texto, resuelve) {
   try {
     const doc = bitacora();
     const cuerpo = doc.getBody();
-    if (cuerpo.getText().length > LIMITE_BITACORA) archivarBitacora(doc);
+    // Medir el largo cuesta: se revisa una vez cada 25 anotaciones.
+    const props = PropertiesService.getScriptProperties();
+    const n = Number(props.getProperty("anotaciones") || 0) + 1;
+    props.setProperty("anotaciones", String(n % 25));
+    if (n % 25 === 0 && cuerpo.getText().length > LIMITE_BITACORA) archivarBitacora(doc);
     let pos = inicioBitacora(cuerpo);
     const fecha = Utilities.formatDate(new Date(), zonaHoja(), "dd/MM/yyyy HH:mm");
     if (resuelve && codigo) marcarResueltas(cuerpo, codigo, resuelve + " el " + fecha);
@@ -1373,7 +1512,7 @@ function enlazar(parrafo, linea) {
 function partirEnlaces(linea) {
   const enlaces = [];
   let visible = "", desde = 0, m;
-  const re = /\[\[([^|\]]+)\|([^\]\s]+)\]\]/g;
+  const re = new RegExp(RE_ENLACE.source, "g");
   while ((m = re.exec(linea)) !== null) {
     visible += linea.slice(desde, m.index);
     enlaces.push({ ini: visible.length, fin: visible.length + m[1].length - 1, url: m[2] });
